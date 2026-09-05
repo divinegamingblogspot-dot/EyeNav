@@ -3,6 +3,8 @@ package com.prince.eyenav
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.Gravity
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -10,8 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -23,22 +25,19 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
-
     private lateinit var cameraExecutor: ExecutorService
-
     private lateinit var eyeTracker: EyeTracker
 
     private lateinit var calibrationTarget: TextView
 
-private var calibrationRunning = false
+    private var calibrationRunning = false
+    private var calibrationStartTime = 0L
 
-private var calibrationStartTime = 0L
+    private val calibrationSamplesX =
+        mutableListOf<Float>()
 
-private val calibrationSamplesX =
-    mutableListOf<Float>()
-
-private val calibrationSamplesY =
-    mutableListOf<Float>()
+    private val calibrationSamplesY =
+        mutableListOf<Float>()
 
     private val cameraPermissionLauncher =
         registerForActivityResult(
@@ -79,10 +78,17 @@ private val calibrationSamplesY =
 
         previewView =
             PreviewView(this).apply {
-
                 scaleType =
                     PreviewView.ScaleType.FILL_CENTER
             }
+
+        container.addView(
+            previewView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
 
         statusText =
             TextView(this).apply {
@@ -101,56 +107,59 @@ private val calibrationSamplesY =
             }
 
         container.addView(
-    statusText
-)
+            statusText
+        )
 
-calibrationTarget =
-    TextView(this).apply {
+        calibrationTarget =
+            TextView(this).apply {
 
-        text = "●"
+                text = "●"
 
-        textSize = 50f
+                textSize = 50f
 
-        gravity =
-            android.view.Gravity.CENTER
+                gravity =
+                    Gravity.CENTER
 
-        visibility =
-            TextView.GONE
-    }
+                visibility =
+                    TextView.GONE
+            }
 
-container.addView(
-    calibrationTarget
-)
-
-val calibrationButton =
-    android.widget.Button(this).apply {
-
-        text = "START CALIBRATION"
-
-        setOnClickListener {
-            startCalibration()
-        }
-    }
-
-val buttonParams =
-    FrameLayout.LayoutParams(
-        FrameLayout.LayoutParams.WRAP_CONTENT,
-        FrameLayout.LayoutParams.WRAP_CONTENT
-    )
-
-buttonParams.gravity =
-    android.view.Gravity.BOTTOM or
-    android.view.Gravity.CENTER_HORIZONTAL
-
-buttonParams.bottomMargin = 80
-
-container.addView(
-    calibrationButton,
-    buttonParams
-)
+        val targetParams =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            )
 
         container.addView(
-            statusText
+            calibrationTarget,
+            targetParams
+        )
+
+        val calibrationButton =
+            Button(this).apply {
+
+                text = "START CALIBRATION"
+
+                setOnClickListener {
+                    startCalibration()
+                }
+            }
+
+        val buttonParams =
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+
+        buttonParams.gravity =
+            Gravity.BOTTOM or
+            Gravity.CENTER_HORIZONTAL
+
+        buttonParams.bottomMargin = 80
+
+        container.addView(
+            calibrationButton,
+            buttonParams
         )
 
         setContentView(container)
@@ -195,14 +204,14 @@ container.addView(
             )
 
             val imageAnalysis =
-    ImageAnalysis.Builder()
-        .setOutputImageFormat(
-            ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888
-        )
-        .setBackpressureStrategy(
-            ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
-        )
-        .build()
+                ImageAnalysis.Builder()
+                    .setOutputImageFormat(
+                        ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888
+                    )
+                    .setBackpressureStrategy(
+                        ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+                    )
+                    .build()
 
             imageAnalysis.setAnalyzer(
                 cameraExecutor
@@ -264,12 +273,15 @@ container.addView(
 
             runOnUiThread {
 
-    if (calibrationRunning) {
-        processCalibration()
-    } else {
-        updateStatus()
-    }
-}
+                if (calibrationRunning) {
+
+                    processCalibration()
+
+                } else {
+
+                    updateStatus()
+                }
+            }
 
         } catch (exception: Exception) {
 
@@ -287,153 +299,198 @@ container.addView(
         }
     }
 
-   private fun updateStatus() {
+    private fun updateStatus() {
 
-    val error =
-        EyeNavState.errorMessage
+        val error =
+            EyeNavState.errorMessage
 
-    if (error != null) {
+        if (error != null) {
 
-        statusText.text =
-            "EyeNav\n\n" +
-            "MediaPipe Error:\n" +
-            error
+            statusText.text =
+                "EyeNav\n\n" +
+                "MediaPipe Error:\n" +
+                error
 
-        return
+            return
+        }
+
+        if (EyeNavState.faceDetected) {
+
+            statusText.text =
+                "EyeNav\n\n" +
+                "FACE DETECTED ✓\n\n" +
+                "Landmarks: ${EyeNavState.landmarkCount}\n\n" +
+                "LEFT IRIS\n" +
+                "X: ${"%.3f".format(EyeNavState.leftIrisX)}\n" +
+                "Y: ${"%.3f".format(EyeNavState.leftIrisY)}\n\n" +
+                "RIGHT IRIS\n" +
+                "X: ${"%.3f".format(EyeNavState.rightIrisX)}\n" +
+                "Y: ${"%.3f".format(EyeNavState.rightIrisY)}\n\n" +
+                "GAZE\n" +
+                "X: ${"%.3f".format(EyeNavState.gazeX)}\n" +
+                "Y: ${"%.3f".format(EyeNavState.gazeY)}\n" +
+                "Horizontal: ${"%.2f".format(EyeNavState.gazeHorizontal)}\n" +
+                "Vertical: ${"%.2f".format(EyeNavState.gazeVertical)}"
+
+        } else {
+
+            statusText.text =
+                "EyeNav\n\n" +
+                "Looking for your face..."
+        }
     }
 
-    if (EyeNavState.faceDetected) {
+    private fun startCalibration() {
 
-        statusText.text =
-            "EyeNav\n\n" +
-            "FACE DETECTED ✓\n\n" +
-            "Landmarks: ${EyeNavState.landmarkCount}\n\n" +
-            "LEFT IRIS\n" +
-            "X: ${"%.3f".format(EyeNavState.leftIrisX)}\n" +
-            "Y: ${"%.3f".format(EyeNavState.leftIrisY)}\n\n" +
-            "RIGHT IRIS\n" +
-            "X: ${"%.3f".format(EyeNavState.rightIrisX)}\n" +
-            "Y: ${"%.3f".format(EyeNavState.rightIrisY)}\n\n" +
-            "GAZE\n" +
-            "X: ${"%.3f".format(EyeNavState.gazeX)}\n" +
-            "Y: ${"%.3f".format(EyeNavState.gazeY)}"
-            "Y: ${"%.3f".format(EyeNavState.gazeY)}\n" +
-            "Horizontal: ${"%.2f".format(EyeNavState.gazeHorizontal)}\n" +
-            "Vertical: ${"%.2f".format(EyeNavState.gazeVertical)}"
+        CalibrationManager.reset()
 
-    } else {
+        calibrationRunning = true
 
-        statusText.text =
-            "EyeNav\n\n" +
-            "Looking for your face..."
-    }
-}
-
-    }
-}
-
-private fun startCalibration() {
-
-    CalibrationManager.reset()
-    calibrationRunning = true
-    calibrationStartTime = System.currentTimeMillis()
-
-    calibrationSamplesX.clear()
-    calibrationSamplesY.clear()
-
-    calibrationTarget.visibility = TextView.VISIBLE
-
-    positionCalibrationTarget()
-
-    statusText.text =
-        "CALIBRATION\n\nLook directly at the dot\n\nKeep your head still"
-}
-
-private fun positionCalibrationTarget() {
-
-    val position = CalibrationManager.target()
-
-    val width = previewView.width
-    val height = previewView.height
-
-    if (width <= 0 || height <= 0) return
-
-    val x = position.first * width
-    val y = position.second * height
-
-    val params =
-        calibrationTarget.layoutParams
-            as FrameLayout.LayoutParams
-
-    params.leftMargin =
-        x.toInt() - calibrationTarget.width / 2
-
-    params.topMargin =
-        y.toInt() - calibrationTarget.height / 2
-
-    calibrationTarget.layoutParams = params
-}
-
-private fun processCalibration() {
-
-    if (!calibrationRunning) return
-
-    if (!EyeNavState.faceDetected) {
-        statusText.text = "CALIBRATION\n\nFace not detected"
-        return
-    }
-
-    val elapsed =
-        System.currentTimeMillis() - calibrationStartTime
-
-    if (elapsed < 1000) {
-        statusText.text = "CALIBRATION\n\nLook at the dot..."
-        return
-    }
-
-    calibrationSamplesX.add(EyeNavState.gazeX)
-    calibrationSamplesY.add(EyeNavState.gazeY)
-
-    statusText.text =
-        "CALIBRATION\n\nPoint ${CalibrationManager.currentTarget + 1} / 9"
-
-    if (calibrationSamplesX.size >= 30) {
-
-        val averageX =
-            calibrationSamplesX.average().toFloat()
-
-        val averageY =
-            calibrationSamplesY.average().toFloat()
-
-        CalibrationManager.addPoint(
-            averageX,
-            averageY,
-            previewView.width.toFloat(),
-            previewView.height.toFloat()
-        )
+        calibrationStartTime =
+            System.currentTimeMillis()
 
         calibrationSamplesX.clear()
         calibrationSamplesY.clear()
 
-        if (CalibrationManager.isCalibrated) {
+        calibrationTarget.visibility =
+            TextView.VISIBLE
 
-            calibrationRunning = false
-            calibrationTarget.visibility = TextView.GONE
+        positionCalibrationTarget()
+
+        statusText.text =
+            "CALIBRATION\n\n" +
+            "Look directly at the dot\n\n" +
+            "Keep your head still"
+    }
+
+    private fun positionCalibrationTarget() {
+
+        val position =
+            CalibrationManager.target()
+
+        val width =
+            previewView.width
+
+        val height =
+            previewView.height
+
+        if (
+            width <= 0 ||
+            height <= 0
+        ) {
+            return
+        }
+
+        val x =
+            position.first * width
+
+        val y =
+            position.second * height
+
+        val params =
+            calibrationTarget.layoutParams
+                as FrameLayout.LayoutParams
+
+        params.leftMargin =
+            x.toInt() -
+            calibrationTarget.width / 2
+
+        params.topMargin =
+            y.toInt() -
+            calibrationTarget.height / 2
+
+        calibrationTarget.layoutParams =
+            params
+    }
+
+    private fun processCalibration() {
+
+        if (!calibrationRunning) {
+            return
+        }
+
+        if (!EyeNavState.faceDetected) {
 
             statusText.text =
-                "CALIBRATION COMPLETE ✓\n\nEyeNav is ready."
+                "CALIBRATION\n\n" +
+                "Face not detected"
 
-        } else {
+            return
+        }
 
-            calibrationStartTime =
-                System.currentTimeMillis()
+        val elapsed =
+            System.currentTimeMillis() -
+            calibrationStartTime
 
-            positionCalibrationTarget()
+        if (elapsed < 1000) {
+
+            statusText.text =
+                "CALIBRATION\n\n" +
+                "Look at the dot..."
+
+            return
+        }
+
+        calibrationSamplesX.add(
+            EyeNavState.gazeX
+        )
+
+        calibrationSamplesY.add(
+            EyeNavState.gazeY
+        )
+
+        statusText.text =
+            "CALIBRATION\n\n" +
+            "Point ${CalibrationManager.currentTarget + 1} / 9"
+
+        if (
+            calibrationSamplesX.size >= 30
+        ) {
+
+            val averageX =
+                calibrationSamplesX
+                    .average()
+                    .toFloat()
+
+            val averageY =
+                calibrationSamplesY
+                    .average()
+                    .toFloat()
+
+            CalibrationManager.addPoint(
+                averageX,
+                averageY,
+                previewView.width.toFloat(),
+                previewView.height.toFloat()
+            )
+
+            calibrationSamplesX.clear()
+            calibrationSamplesY.clear()
+
+            if (
+                CalibrationManager.isCalibrated
+            ) {
+
+                calibrationRunning = false
+
+                calibrationTarget.visibility =
+                    TextView.GONE
+
+                statusText.text =
+                    "CALIBRATION COMPLETE ✓\n\n" +
+                    "EyeNav is ready."
+
+            } else {
+
+                calibrationStartTime =
+                    System.currentTimeMillis()
+
+                positionCalibrationTarget()
+            }
         }
     }
-}
 
-override fun onDestroy() {
+    override fun onDestroy() {
 
         eyeTracker.close()
 
