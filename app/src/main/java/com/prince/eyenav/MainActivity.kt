@@ -1,92 +1,109 @@
 package com.prince.eyenav
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.provider.Settings
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+    private lateinit var previewView: PreviewView
 
+    private val cameraPermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+
+            if (granted) {
+                startCamera()
+            } else {
+                Toast.makeText(
+                    this,
+                    "Camera permission is required for EyeNav",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        requestCameraPermission()
+        previewView = PreviewView(this)
 
-        val layout =
-            LinearLayout(this).apply {
-                orientation =
-                    LinearLayout.VERTICAL
+        previewView.scaleType =
+            PreviewView.ScaleType.FILL_CENTER
 
-                setPadding(
-                    40,
-                    60,
-                    40,
-                    40
-                )
-            }
+        setContentView(previewView)
 
-        val title =
-            TextView(this).apply {
-                text = "EyeNav"
-                textSize = 32f
-            }
-
-        val description =
-            TextView(this).apply {
-
-                text =
-                    "\nEye-controlled Android navigation\n\n" +
-                    "Foundation build\n\n" +
-                    "Next: eye tracking, calibration and gaze cursor."
-
-                textSize = 17f
-            }
-
-        val button =
-            Button(this).apply {
-
-                text =
-                    "Enable EyeNav Accessibility"
-
-                setOnClickListener {
-
-                    startActivity(
-                        Intent(
-                            Settings.ACTION_ACCESSIBILITY_SETTINGS
-                        )
-                    )
-                }
-            }
-
-        layout.addView(title)
-        layout.addView(description)
-        layout.addView(button)
-
-        setContentView(layout)
+        checkCameraPermission()
     }
 
-    private fun requestCameraPermission() {
+    private fun checkCameraPermission() {
 
         if (
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.CAMERA
-            ) != PackageManager.PERMISSION_GRANTED
+            ) == PackageManager.PERMISSION_GRANTED
         ) {
 
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.CAMERA),
-                100
+            startCamera()
+
+        } else {
+
+            cameraPermissionLauncher.launch(
+                Manifest.permission.CAMERA
             )
         }
+    }
+
+    private fun startCamera() {
+
+        val cameraProviderFuture =
+            ProcessCameraProvider.getInstance(this)
+
+        cameraProviderFuture.addListener({
+
+            val cameraProvider =
+                cameraProviderFuture.get()
+
+            val preview =
+                Preview.Builder()
+                    .build()
+
+            preview.setSurfaceProvider(
+                previewView.surfaceProvider
+            )
+
+            val cameraSelector =
+                CameraSelector.DEFAULT_FRONT_CAMERA
+
+            try {
+
+                cameraProvider.unbindAll()
+
+                cameraProvider.bindToLifecycle(
+                    this,
+                    cameraSelector,
+                    preview
+                )
+
+            } catch (exception: Exception) {
+
+                Toast.makeText(
+                    this,
+                    "Unable to start camera",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+
+        }, ContextCompat.getMainExecutor(this))
     }
 }
