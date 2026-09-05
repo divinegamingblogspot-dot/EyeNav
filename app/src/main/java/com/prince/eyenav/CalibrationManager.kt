@@ -1,31 +1,33 @@
 package com.prince.eyenav
 
+import android.content.Context
+
 data class CalibrationPoint(
     val gazeX: Float,
     val gazeY: Float,
-    val screenX: Float,
-    val screenY: Float
+    val targetX: Float,
+    val targetY: Float
 )
 
 object CalibrationManager {
 
-    private val points =
-        mutableListOf<CalibrationPoint>()
+    private const val PREFS = "eyenav_calibration"
+    private const val KEY_COUNT = "count"
+    private const val KEY_PREFIX = "p_"
 
-    private val targetPositions =
-        listOf(
-            0.10f to 0.10f,
-            0.50f to 0.10f,
-            0.90f to 0.10f,
+    private val points = mutableListOf<CalibrationPoint>()
 
-            0.10f to 0.50f,
-            0.50f to 0.50f,
-            0.90f to 0.50f,
-
-            0.10f to 0.90f,
-            0.50f to 0.90f,
-            0.90f to 0.90f
-        )
+    private val targetPositions = listOf(
+        0.10f to 0.10f,
+        0.50f to 0.10f,
+        0.90f to 0.10f,
+        0.10f to 0.50f,
+        0.50f to 0.50f,
+        0.90f to 0.50f,
+        0.10f to 0.90f,
+        0.50f to 0.90f,
+        0.90f to 0.90f
+    )
 
     var currentTarget = 0
         private set
@@ -33,55 +35,69 @@ object CalibrationManager {
     var isCalibrated = false
         private set
 
-    fun reset() {
+    fun load(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val count = prefs.getInt(KEY_COUNT, 0)
 
         points.clear()
+        for (i in 0 until count) {
+            val value = prefs.getString(KEY_PREFIX + i, null) ?: continue
+            val parts = value.split(",")
+            if (parts.size == 4) {
+                points += CalibrationPoint(
+                    parts[0].toFloatOrNull() ?: continue,
+                    parts[1].toFloatOrNull() ?: continue,
+                    parts[2].toFloatOrNull() ?: continue,
+                    parts[3].toFloatOrNull() ?: continue
+                )
+            }
+        }
 
-        currentTarget = 0
-
-        isCalibrated = false
+        isCalibrated = points.size >= targetPositions.size
+        currentTarget = if (isCalibrated) targetPositions.size else points.size
     }
 
-    fun target(): Pair<Float, Float> {
-
-        return targetPositions[
-            currentTarget.coerceIn(
-                0,
-                targetPositions.lastIndex
+    fun save(context: Context) {
+        val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        editor.clear()
+        editor.putInt(KEY_COUNT, points.size)
+        points.forEachIndexed { index, point ->
+            editor.putString(
+                KEY_PREFIX + index,
+                "${point.gazeX},${point.gazeY},${point.targetX},${point.targetY}"
             )
-        ]
+        }
+        editor.apply()
     }
 
-    fun addPoint(
-        gazeX: Float,
-        gazeY: Float,
-        screenWidth: Float,
-        screenHeight: Float
-    ) {
+    fun reset(context: Context? = null) {
+        points.clear()
+        currentTarget = 0
+        isCalibrated = false
+        context?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            ?.edit()
+            ?.clear()
+            ?.apply()
+    }
 
-        val target =
-            target()
+    fun target(): Pair<Float, Float> = targetPositions[
+        currentTarget.coerceIn(0, targetPositions.lastIndex)
+    ]
 
+    fun addPoint(gazeX: Float, gazeY: Float) {
+        val target = target()
         points.add(
             CalibrationPoint(
                 gazeX = gazeX,
                 gazeY = gazeY,
-                screenX =
-                    target.first *
-                        screenWidth,
-                screenY =
-                    target.second *
-                        screenHeight
+                targetX = target.first,
+                targetY = target.second
             )
         )
 
         currentTarget++
-
-        if (
-            currentTarget >=
-            targetPositions.size
-        ) {
-
+        if (currentTarget >= targetPositions.size) {
+            currentTarget = targetPositions.size
             isCalibrated = true
         }
     }
@@ -92,85 +108,34 @@ object CalibrationManager {
         width: Float,
         height: Float
     ): Pair<Float, Float> {
-
-        if (points.size < 9) {
-
-            return Pair(
-                width / 2f,
-                height / 2f
-            )
+        if (points.size < targetPositions.size) {
+            return width / 2f to height / 2f
         }
 
-        val sortedPoints =
-            points.sortedBy {
+        val sorted = points.sortedBy {
+            val dx = it.gazeX - gazeX
+            val dy = it.gazeY - gazeY
+            dx * dx + dy * dy
+        }
 
-                val dx =
-                    it.gazeX - gazeX
-
-                val dy =
-                    it.gazeY - gazeY
-
-                dx * dx +
-                    dy * dy
-            }
-
-        val nearest =
-            sortedPoints.take(4)
-
+        val nearest = sorted.take(4)
         var totalWeight = 0f
         var weightedX = 0f
         var weightedY = 0f
 
         for (point in nearest) {
-
-            val dx =
-                point.gazeX - gazeX
-
-            val dy =
-                point.gazeY - gazeY
-
-            val distance =
-                dx * dx +
-                    dy * dy
-
-            val weight =
-                1f /
-                    (distance + 0.0001f)
-
-            weightedX +=
-                point.screenX *
-                    weight
-
-            weightedY +=
-                point.screenY *
-                    weight
-
+            val dx = point.gazeX - gazeX
+            val dy = point.gazeY - gazeY
+            val distance = dx * dx + dy * dy
+            val weight = 1f / (distance + 0.0001f)
+            weightedX += point.targetX * weight
+            weightedY += point.targetY * weight
             totalWeight += weight
         }
 
-        var resultX =
-            weightedX /
-                totalWeight
+        val normalizedX = (weightedX / totalWeight).coerceIn(0.01f, 0.99f)
+        val normalizedY = (weightedY / totalWeight).coerceIn(0.01f, 0.99f)
 
-        var resultY =
-            weightedY /
-                totalWeight
-
-        resultX =
-            resultX.coerceIn(
-                0f,
-                width
-            )
-
-        resultY =
-            resultY.coerceIn(
-                0f,
-                height
-            )
-
-        return Pair(
-            resultX,
-            resultY
-        )
+        return normalizedX * width to normalizedY * height
     }
 }
