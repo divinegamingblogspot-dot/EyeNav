@@ -2,7 +2,10 @@ package com.prince.eyenav
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Gravity
 import android.widget.Button
 import android.widget.FrameLayout
@@ -20,6 +23,7 @@ import androidx.core.content.ContextCompat
 import com.google.mediapipe.framework.image.MediaImageBuilder
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
@@ -30,6 +34,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var calibrationTarget: TextView
     private lateinit var gazeCursor: TextView
+    private lateinit var dwellProgress: TextView
 
     private var calibrationRunning = false
     private var calibrationStartTime = 0L
@@ -40,14 +45,49 @@ class MainActivity : AppCompatActivity() {
     private val calibrationSamplesY =
         mutableListOf<Float>()
 
+    // -----------------------------
+    // SMOOTHING
+    // -----------------------------
+
+    private var smoothX = 0f
+    private var smoothY = 0f
+
+    private val smoothingFactor = 0.18f
+
+    private var cursorInitialized = false
+
+    // -----------------------------
+    // DWELL CLICK
+    // -----------------------------
+
+    private var dwellStartTime = 0L
+
+    private var dwellTriggered = false
+
+    private val dwellDuration =
+        800L
+
+    private val dwellMovementTolerance =
+        45f
+
+    private var lastDwellX = 0f
+    private var lastDwellY = 0f
+
+    // -----------------------------
+    // CAMERA PERMISSION
+    // -----------------------------
+
     private val cameraPermissionLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
 
             if (granted) {
+
                 startCamera()
+
             } else {
+
                 Toast.makeText(
                     this,
                     "Camera permission is required for EyeNav",
@@ -56,7 +96,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+    override fun onCreate(
+        savedInstanceState: Bundle?
+    ) {
+
         super.onCreate(savedInstanceState)
 
         cameraExecutor =
@@ -72,15 +115,24 @@ class MainActivity : AppCompatActivity() {
         checkCameraPermission()
     }
 
+    // =========================================================
+    // UI
+    // =========================================================
+
     private fun createInterface() {
 
         val container =
             FrameLayout(this)
 
+        // CAMERA PREVIEW
         previewView =
             PreviewView(this).apply {
+
                 scaleType =
                     PreviewView.ScaleType.FILL_CENTER
+
+                implementationMode =
+                    PreviewView.ImplementationMode.COMPATIBLE
             }
 
         container.addView(
@@ -91,13 +143,16 @@ class MainActivity : AppCompatActivity() {
             )
         )
 
+        // STATUS
         statusText =
             TextView(this).apply {
 
                 text =
                     "EyeNav\n\nStarting camera..."
 
-                textSize = 20f
+                textSize = 18f
+
+                setTextColor(Color.WHITE)
 
                 setPadding(
                     30,
@@ -105,25 +160,39 @@ class MainActivity : AppCompatActivity() {
                     30,
                     30
                 )
+
+                elevation = 10f
             }
 
         container.addView(
             statusText
         )
 
+        // CALIBRATION TARGET
         calibrationTarget =
             TextView(this).apply {
 
                 text = "●"
+
                 textSize = 50f
-                gravity = Gravity.CENTER
-                visibility = TextView.GONE
+
+                gravity =
+                    Gravity.CENTER
+
+                setTextColor(
+                    Color.WHITE
+                )
+
+                visibility =
+                    TextView.GONE
+
+                elevation = 100f
             }
 
         val targetParams =
             FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
+                90,
+                90
             )
 
         container.addView(
@@ -131,19 +200,38 @@ class MainActivity : AppCompatActivity() {
             targetParams
         )
 
+        // GAZE CURSOR
         gazeCursor =
             TextView(this).apply {
 
-                text = "●"
-                textSize = 28f
-                gravity = Gravity.CENTER
-                visibility = TextView.GONE
+                text = ""
+
+                visibility =
+                    TextView.GONE
+
+                background =
+                    GradientDrawable().apply {
+
+                        shape =
+                            GradientDrawable.OVAL
+
+                        setColor(
+                            Color.RED
+                        )
+
+                        setStroke(
+                            5,
+                            Color.WHITE
+                        )
+                    }
+
+                elevation = 1000f
             }
 
         val cursorParams =
             FrameLayout.LayoutParams(
-                60,
-                60
+                70,
+                70
             )
 
         container.addView(
@@ -151,12 +239,47 @@ class MainActivity : AppCompatActivity() {
             cursorParams
         )
 
+        // DWELL PROGRESS
+        dwellProgress =
+            TextView(this).apply {
+
+                text = ""
+
+                textSize = 14f
+
+                gravity =
+                    Gravity.CENTER
+
+                setTextColor(
+                    Color.WHITE
+                )
+
+                visibility =
+                    TextView.GONE
+
+                elevation = 1001f
+            }
+
+        val dwellParams =
+            FrameLayout.LayoutParams(
+                100,
+                50
+            )
+
+        container.addView(
+            dwellProgress,
+            dwellParams
+        )
+
+        // CALIBRATION BUTTON
         val calibrationButton =
             Button(this).apply {
 
-                text = "START CALIBRATION"
+                text =
+                    "START CALIBRATION"
 
                 setOnClickListener {
+
                     startCalibration()
                 }
             }
@@ -171,7 +294,8 @@ class MainActivity : AppCompatActivity() {
             Gravity.BOTTOM or
             Gravity.CENTER_HORIZONTAL
 
-        buttonParams.bottomMargin = 80
+        buttonParams.bottomMargin =
+            80
 
         container.addView(
             calibrationButton,
@@ -180,6 +304,10 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(container)
     }
+
+    // =========================================================
+    // CAMERA PERMISSION
+    // =========================================================
 
     private fun checkCameraPermission() {
 
@@ -201,10 +329,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // =========================================================
+    // CAMERA
+    // =========================================================
+
     private fun startCamera() {
 
         val cameraProviderFuture =
-            ProcessCameraProvider.getInstance(this)
+            ProcessCameraProvider.getInstance(
+                this
+            )
 
         cameraProviderFuture.addListener({
 
@@ -221,19 +355,26 @@ class MainActivity : AppCompatActivity() {
 
             val imageAnalysis =
                 ImageAnalysis.Builder()
+
                     .setOutputImageFormat(
-                        ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888
+                        ImageAnalysis
+                            .OUTPUT_IMAGE_FORMAT_RGBA_8888
                     )
+
                     .setBackpressureStrategy(
-                        ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+                        ImageAnalysis
+                            .STRATEGY_KEEP_ONLY_LATEST
                     )
+
                     .build()
 
             imageAnalysis.setAnalyzer(
                 cameraExecutor
             ) { imageProxy ->
 
-                analyzeFrame(imageProxy)
+                analyzeFrame(
+                    imageProxy
+                )
             }
 
             val cameraSelector =
@@ -263,6 +404,10 @@ class MainActivity : AppCompatActivity() {
 
         }, ContextCompat.getMainExecutor(this))
     }
+
+    // =========================================================
+    // FRAME PROCESSING
+    // =========================================================
 
     private fun analyzeFrame(
         imageProxy: ImageProxy
@@ -298,9 +443,13 @@ class MainActivity : AppCompatActivity() {
                     updateStatus()
 
                     if (
-                        CalibrationManager.isCalibrated
+                        CalibrationManager.isCalibrated &&
+                        EyeNavState.faceDetected
                     ) {
+
                         updateGazeCursor()
+
+                        processDwell()
                     }
                 }
             }
@@ -321,6 +470,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // =========================================================
+    // STATUS
+    // =========================================================
+
     private fun updateStatus() {
 
         val error =
@@ -336,23 +489,40 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        if (EyeNavState.faceDetected) {
+        if (
+            EyeNavState.faceDetected
+        ) {
 
             statusText.text =
                 "EyeNav\n\n" +
-                "FACE DETECTED ✓\n\n" +
-                "Landmarks: ${EyeNavState.landmarkCount}\n\n" +
-                "LEFT IRIS\n" +
-                "X: ${"%.3f".format(EyeNavState.leftIrisX)}\n" +
-                "Y: ${"%.3f".format(EyeNavState.leftIrisY)}\n\n" +
-                "RIGHT IRIS\n" +
-                "X: ${"%.3f".format(EyeNavState.rightIrisX)}\n" +
-                "Y: ${"%.3f".format(EyeNavState.rightIrisY)}\n\n" +
+                "FACE DETECTED\n\n" +
+                "Landmarks: " +
+                EyeNavState.landmarkCount +
+                "\n\n" +
+
                 "GAZE\n" +
-                "X: ${"%.3f".format(EyeNavState.gazeX)}\n" +
-                "Y: ${"%.3f".format(EyeNavState.gazeY)}\n" +
-                "Horizontal: ${"%.2f".format(EyeNavState.gazeHorizontal)}\n" +
-                "Vertical: ${"%.2f".format(EyeNavState.gazeVertical)}"
+                "X: " +
+                "%.3f".format(
+                    EyeNavState.gazeX
+                ) +
+                "\n" +
+
+                "Y: " +
+                "%.3f".format(
+                    EyeNavState.gazeY
+                ) +
+                "\n\n" +
+
+                "Horizontal: " +
+                "%.2f".format(
+                    EyeNavState.gazeHorizontal
+                ) +
+                "\n" +
+
+                "Vertical: " +
+                "%.2f".format(
+                    EyeNavState.gazeVertical
+                )
 
         } else {
 
@@ -362,31 +532,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // =========================================================
+    // CALIBRATION START
+    // =========================================================
+
     private fun startCalibration() {
 
         CalibrationManager.reset()
 
-        calibrationRunning = true
+        calibrationRunning =
+            true
 
         calibrationStartTime =
-            System.currentTimeMillis()
+            SystemClock.uptimeMillis()
 
         calibrationSamplesX.clear()
         calibrationSamplesY.clear()
 
+        cursorInitialized =
+            false
+
+        dwellStartTime =
+            0L
+
+        dwellTriggered =
+            false
+
         gazeCursor.visibility =
+            TextView.GONE
+
+        dwellProgress.visibility =
             TextView.GONE
 
         calibrationTarget.visibility =
             TextView.VISIBLE
 
-        positionCalibrationTarget()
-
         statusText.text =
             "CALIBRATION\n\n" +
             "Look directly at the dot\n\n" +
             "Keep your head still"
+
+        previewView.post {
+
+            positionCalibrationTarget()
+        }
     }
+
+    // =========================================================
+    // CALIBRATION TARGET POSITION
+    // =========================================================
 
     private fun positionCalibrationTarget() {
 
@@ -417,16 +611,20 @@ class MainActivity : AppCompatActivity() {
                 as FrameLayout.LayoutParams
 
         params.leftMargin =
-            x.toInt() -
-            calibrationTarget.width / 2
+            x.toInt() - 45
 
         params.topMargin =
-            y.toInt() -
-            calibrationTarget.height / 2
+            y.toInt() - 45
 
         calibrationTarget.layoutParams =
             params
+
+        calibrationTarget.bringToFront()
     }
+
+    // =========================================================
+    // CALIBRATION PROCESS
+    // =========================================================
 
     private fun processCalibration() {
 
@@ -434,7 +632,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        if (!EyeNavState.faceDetected) {
+        if (
+            !EyeNavState.faceDetected
+        ) {
 
             statusText.text =
                 "CALIBRATION\n\n" +
@@ -444,7 +644,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val elapsed =
-            System.currentTimeMillis() -
+            SystemClock.uptimeMillis() -
             calibrationStartTime
 
         if (elapsed < 1000) {
@@ -466,8 +666,11 @@ class MainActivity : AppCompatActivity() {
 
         statusText.text =
             "CALIBRATION\n\n" +
-            "Point ${CalibrationManager.currentTarget + 1} / 9"
+            "Point " +
+            (CalibrationManager.currentTarget + 1) +
+            " / 9"
 
+        // 30 samples per point
         if (
             calibrationSamplesX.size >= 30
         ) {
@@ -496,7 +699,8 @@ class MainActivity : AppCompatActivity() {
                 CalibrationManager.isCalibrated
             ) {
 
-                calibrationRunning = false
+                calibrationRunning =
+                    false
 
                 calibrationTarget.visibility =
                     TextView.GONE
@@ -504,19 +708,43 @@ class MainActivity : AppCompatActivity() {
                 gazeCursor.visibility =
                     TextView.VISIBLE
 
+                dwellProgress.visibility =
+                    TextView.VISIBLE
+
+                cursorInitialized =
+                    false
+
+                dwellStartTime =
+                    0L
+
+                dwellTriggered =
+                    false
+
                 statusText.text =
-                    "CALIBRATION COMPLETE ✓\n\n" +
-                    "EyeNav is ready."
+                    "CALIBRATION COMPLETE\n\n" +
+                    "Move your eyes.\n\n" +
+                    "RED CIRCLE = GAZE CURSOR"
+
+                gazeCursor.bringToFront()
+
+                dwellProgress.bringToFront()
 
             } else {
 
                 calibrationStartTime =
-                    System.currentTimeMillis()
+                    SystemClock.uptimeMillis()
 
-                positionCalibrationTarget()
+                previewView.post {
+
+                    positionCalibrationTarget()
+                }
             }
         }
     }
+
+    // =========================================================
+    // GAZE CURSOR
+    // =========================================================
 
     private fun updateGazeCursor() {
 
@@ -535,21 +763,197 @@ class MainActivity : AppCompatActivity() {
                 previewView.height.toFloat()
             )
 
-        val params =
+        val targetX =
+            position.first
+
+        val targetY =
+            position.second
+
+        // FIRST POSITION
+        if (!cursorInitialized) {
+
+            smoothX =
+                targetX
+
+            smoothY =
+                targetY
+
+            cursorInitialized =
+                true
+
+        } else {
+
+            // SMOOTH MOVEMENT
+            smoothX +=
+                (targetX - smoothX) *
+                smoothingFactor
+
+            smoothY +=
+                (targetY - smoothY) *
+                smoothingFactor
+        }
+
+        val cursorParams =
             gazeCursor.layoutParams
                 as FrameLayout.LayoutParams
 
-        params.leftMargin =
-            position.first.toInt() -
-            gazeCursor.width / 2
+        cursorParams.leftMargin =
+            smoothX.toInt() - 35
 
-        params.topMargin =
-            position.second.toInt() -
-            gazeCursor.height / 2
+        cursorParams.topMargin =
+            smoothY.toInt() - 35
 
         gazeCursor.layoutParams =
-            params
+            cursorParams
+
+        gazeCursor.bringToFront()
+
+        // Put dwell text underneath cursor
+        val dwellParams =
+            dwellProgress.layoutParams
+                as FrameLayout.LayoutParams
+
+        dwellParams.leftMargin =
+            smoothX.toInt() - 50
+
+        dwellParams.topMargin =
+            smoothY.toInt() + 45
+
+        dwellProgress.layoutParams =
+            dwellParams
+
+        dwellProgress.bringToFront()
     }
+
+    // =========================================================
+    // DWELL CLICK
+    // =========================================================
+
+    private fun processDwell() {
+
+        if (!cursorInitialized) {
+            return
+        }
+
+        val x =
+            smoothX
+
+        val y =
+            smoothY
+
+        // First position
+        if (
+            dwellStartTime == 0L
+        ) {
+
+            dwellStartTime =
+                SystemClock.uptimeMillis()
+
+            lastDwellX =
+                x
+
+            lastDwellY =
+                y
+
+            dwellTriggered =
+                false
+
+            return
+        }
+
+        val movementX =
+            abs(
+                x - lastDwellX
+            )
+
+        val movementY =
+            abs(
+                y - lastDwellY
+            )
+
+        // Eye moved too much
+        if (
+            movementX >
+            dwellMovementTolerance ||
+            movementY >
+            dwellMovementTolerance
+        ) {
+
+            dwellStartTime =
+                SystemClock.uptimeMillis()
+
+            lastDwellX =
+                x
+
+            lastDwellY =
+                y
+
+            dwellTriggered =
+                false
+
+            dwellProgress.text =
+                ""
+
+            return
+        }
+
+        val elapsed =
+            SystemClock.uptimeMillis() -
+            dwellStartTime
+
+        val percent =
+            (
+                elapsed.toFloat() /
+                dwellDuration.toFloat()
+            )
+                .coerceIn(
+                    0f,
+                    1f
+                )
+
+        dwellProgress.text =
+            "${(percent * 100).toInt()}%"
+
+        // DWELL COMPLETE
+        if (
+            elapsed >= dwellDuration &&
+            !dwellTriggered
+        ) {
+
+            dwellTriggered =
+                true
+
+            performEyeClick()
+
+            dwellStartTime =
+                SystemClock.uptimeMillis()
+
+            dwellProgress.text =
+                "CLICK"
+        }
+    }
+
+    // =========================================================
+    // EYE CLICK
+    // =========================================================
+
+    private fun performEyeClick() {
+
+        Toast.makeText(
+            this,
+            "EYE CLICK",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        statusText.text =
+            "EyeNav\n\n" +
+            "EYE CLICK\n\n" +
+            "Gaze cursor activated"
+    }
+
+    // =========================================================
+    // DESTROY
+    // =========================================================
 
     override fun onDestroy() {
 
