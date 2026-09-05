@@ -3,18 +3,29 @@ package com.prince.eyenav
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import com.google.mediapipe.framework.image.MediaImageBuilder
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
+    private lateinit var statusText: TextView
+
+    private lateinit var cameraExecutor: ExecutorService
+
+    private lateinit var eyeTracker: EyeTracker
 
     private val cameraPermissionLauncher =
         registerForActivityResult(
@@ -35,14 +46,52 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        previewView = PreviewView(this)
+        cameraExecutor = Executors.newSingleThreadExecutor()
 
-        previewView.scaleType =
-            PreviewView.ScaleType.FILL_CENTER
+        eyeTracker = EyeTracker(this)
+        eyeTracker.setup()
 
-        setContentView(previewView)
+        createInterface()
 
         checkCameraPermission()
+    }
+
+    private fun createInterface() {
+
+        val container =
+            android.widget.FrameLayout(this)
+
+        previewView =
+            PreviewView(this).apply {
+
+                scaleType =
+                    PreviewView.ScaleType.FILL_CENTER
+            }
+
+        statusText =
+            TextView(this).apply {
+
+                text = "EyeNav\n\nStarting camera..."
+
+                textSize = 20f
+
+                setPadding(
+                    30,
+                    50,
+                    30,
+                    30
+                )
+            }
+
+        container.addView(
+            previewView
+        )
+
+        container.addView(
+            statusText
+        )
+
+        setContentView(container)
     }
 
     private fun checkCameraPermission() {
@@ -82,6 +131,20 @@ class MainActivity : AppCompatActivity() {
                 previewView.surfaceProvider
             )
 
+            val imageAnalysis =
+                ImageAnalysis.Builder()
+                    .setBackpressureStrategy(
+                        ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+                    )
+                    .build()
+
+            imageAnalysis.setAnalyzer(
+                cameraExecutor
+            ) { imageProxy ->
+
+                analyzeFrame(imageProxy)
+            }
+
             val cameraSelector =
                 CameraSelector.DEFAULT_FRONT_CAMERA
 
@@ -92,18 +155,103 @@ class MainActivity : AppCompatActivity() {
                 cameraProvider.bindToLifecycle(
                     this,
                     cameraSelector,
-                    preview
+                    preview,
+                    imageAnalysis
                 )
 
             } catch (exception: Exception) {
 
-                Toast.makeText(
-                    this,
-                    "Unable to start camera",
-                    Toast.LENGTH_LONG
-                ).show()
+                runOnUiThread {
+
+                    Toast.makeText(
+                        this,
+                        "Unable to start camera",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
 
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun analyzeFrame(
+        imageProxy: ImageProxy
+    ) {
+
+        try {
+
+            val mediaImage =
+                imageProxy.image
+
+            if (mediaImage == null) {
+                imageProxy.close()
+                return
+            }
+
+            val mpImage =
+                MediaImageBuilder(
+                    mediaImage
+                ).build()
+
+            eyeTracker.processFrame(
+                mpImage,
+                imageProxy.imageInfo.timestamp
+            )
+
+            runOnUiThread {
+
+                updateStatus()
+            }
+
+        } catch (exception: Exception) {
+
+            runOnUiThread {
+
+                statusText.text =
+                    "EyeNav\n\nError: ${exception.message}"
+            }
+
+        } finally {
+
+            imageProxy.close()
+        }
+    }
+
+    private fun updateStatus() {
+
+        val error =
+            EyeNavState.errorMessage
+
+        if (error != null) {
+
+            statusText.text =
+                "EyeNav\n\nMediaPipe Error:\n$error"
+
+            return
+        }
+
+        if (EyeNavState.faceDetected) {
+
+            statusText.text =
+                "EyeNav\n\n" +
+                "Face detected ✓\n\n" +
+                "Landmarks: " +
+                EyeNavState.landmarkCount
+
+        } else {
+
+            statusText.text =
+                "EyeNav\n\n" +
+                "Looking for your face..."
+        }
+    }
+
+    override fun onDestroy() {
+
+        eyeTracker.close()
+
+        cameraExecutor.shutdown()
+
+        super.onDestroy()
     }
 }
