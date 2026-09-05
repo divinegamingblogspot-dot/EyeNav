@@ -1,6 +1,7 @@
 package com.prince.eyenav
 
 import android.content.Context
+import com.google.mediapipe.framework.image.MPImage
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
@@ -38,15 +39,18 @@ class EyeTracker(
                         val landmarks =
                             faces[0]
 
-                        val count =
-                            landmarks.size
-
                         EyeNavState.update(
                             true,
-                            count
+                            landmarks.size
+                        )
+
+                    } else {
+
+                        EyeNavState.update(
+                            false,
+                            0
                         )
                     }
-
                 }
                 .setErrorListener { error ->
 
@@ -61,6 +65,17 @@ class EyeTracker(
                 context,
                 options
             )
+    }
+
+    fun processFrame(
+        image: MPImage,
+        timestampMs: Long
+    ) {
+
+        faceLandmarker?.detectAsync(
+            image,
+            timestampMs
+        )
     }
 
     fun close() {
