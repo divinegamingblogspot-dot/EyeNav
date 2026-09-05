@@ -15,12 +15,11 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
-import com.google.mediapipe.framework.image.BitmapImageBuilder
-import android.graphics.Bitmap
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -40,12 +39,8 @@ class MainActivity : ComponentActivity() {
     private val calibrationSamplesRequired = 50
     private var calibrationSampleCount = 0
 
-    private var screenWidth = 0f
-    private var screenHeight = 0f
-
     private var smoothedX = 0f
     private var smoothedY = 0f
-
     private var hasPreviousPosition = false
 
     private val smoothingFactor = 0.08f
@@ -61,7 +56,6 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
-
             if (granted) {
                 startCamera()
             } else {
@@ -75,9 +69,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        screenWidth = resources.displayMetrics.widthPixels.toFloat()
-        screenHeight = resources.displayMetrics.heightPixels.toFloat()
 
         createUI()
         setupFaceLandmarker()
@@ -122,7 +113,6 @@ class MainActivity : ComponentActivity() {
 
         gazeCursor.background =
             android.graphics.drawable.GradientDrawable().apply {
-
                 shape =
                     android.graphics.drawable.GradientDrawable.OVAL
 
@@ -140,11 +130,10 @@ class MainActivity : ComponentActivity() {
 
         statusText = TextView(this)
 
-        statusText.text =
-            "LOOK AT THE DOT"
-
+        statusText.text = "LOOK AT THE DOT"
         statusText.textSize = 20f
         statusText.setTextColor(Color.WHITE)
+
         statusText.setBackgroundColor(
             Color.argb(
                 170,
@@ -162,7 +151,9 @@ class MainActivity : ComponentActivity() {
                 FrameLayout.LayoutParams.WRAP_CONTENT
             )
 
-        statusParams.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        statusParams.gravity =
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL
+
         statusParams.topMargin = 50
 
         root.addView(
@@ -172,11 +163,10 @@ class MainActivity : ComponentActivity() {
 
         dwellText = TextView(this)
 
-        dwellText.text =
-            "DWELL: 0%"
-
+        dwellText.text = "DWELL: 0%"
         dwellText.textSize = 18f
         dwellText.setTextColor(Color.WHITE)
+
         dwellText.setBackgroundColor(
             Color.argb(
                 170,
@@ -210,16 +200,16 @@ class MainActivity : ComponentActivity() {
     private fun setupFaceLandmarker() {
 
         val baseOptions =
-            com.google.mediapipe.tasks.core.BaseOptions.builder()
+            com.google.mediapipe.tasks.core.BaseOptions
+                .builder()
                 .setModelAssetPath("face_landmarker.task")
                 .build()
 
         val options =
-            FaceLandmarker.FaceLandmarkerOptions.builder()
+            FaceLandmarker.FaceLandmarkerOptions
+                .builder()
                 .setBaseOptions(baseOptions)
-                .setRunningMode(
-                    RunningMode.LIVE_STREAM
-                )
+                .setRunningMode(RunningMode.LIVE_STREAM)
                 .setNumFaces(1)
                 .setMinFaceDetectionConfidence(0.5f)
                 .setMinFacePresenceConfidence(0.5f)
@@ -284,14 +274,13 @@ class MainActivity : ComponentActivity() {
                         SystemClock.uptimeMillis()
 
                     faceLandmarker.detectAsync(
-                        mpImage,
-                        timestamp
+                        timestamp,
+                        mpImage
                     )
 
                 } catch (_: Exception) {
 
                 } finally {
-
                     imageProxy.close()
                 }
             }
@@ -333,23 +322,11 @@ class MainActivity : ComponentActivity() {
         val rightEye =
             landmarks[473]
 
-        val leftX =
-            leftEye.x()
-
-        val leftY =
-            leftEye.y()
-
-        val rightX =
-            rightEye.x()
-
-        val rightY =
-            rightEye.y()
-
         val gazeX =
-            (leftX + rightX) / 2f
+            (leftEye.x() + rightEye.x()) / 2f
 
         val gazeY =
-            (leftY + rightY) / 2f
+            (leftEye.y() + rightEye.y()) / 2f
 
         runOnUiThread {
 
@@ -402,14 +379,9 @@ class MainActivity : ComponentActivity() {
 
             calibrationSampleCount = 0
 
-            if (
-                CalibrationManager.isCalibrated
-            ) {
+            if (CalibrationManager.isCalibrated) {
 
                 calibrationRunning = false
-
-                gazeCursor.visibility =
-                    View.VISIBLE
 
                 statusText.text =
                     "EYE TRACKING ACTIVE"
@@ -539,18 +511,16 @@ class MainActivity : ComponentActivity() {
         val progress =
             (
                 elapsed.toFloat() /
-                dwellDuration.toFloat()
-            ).coerceIn(
-                0f,
-                1f
-            )
+                    dwellDuration.toFloat()
+                ).coerceIn(
+                    0f,
+                    1f
+                )
 
         dwellText.text =
             "DWELL: ${(progress * 100).toInt()}%"
 
-        if (
-            elapsed >= dwellDuration
-        ) {
+        if (elapsed >= dwellDuration) {
 
             performEyeClick()
 
