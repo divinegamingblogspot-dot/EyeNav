@@ -1,8 +1,5 @@
 package com.prince.eyenav
 
-import kotlin.math.max
-import kotlin.math.min
-
 object EyeNavState {
 
     var faceDetected = false
@@ -38,13 +35,23 @@ object EyeNavState {
     var errorMessage: String? = null
         private set
 
+    private var smoothX = 0f
+    private var smoothY = 0f
+
+    private var initialized = false
+
     fun update(
         detected: Boolean,
         count: Int
     ) {
+
         faceDetected = detected
         landmarkCount = count
         errorMessage = null
+
+        if (!detected) {
+            initialized = false
+        }
     }
 
     fun updateIris(
@@ -60,15 +67,41 @@ object EyeNavState {
         rightIrisX = rightX
         rightIrisY = rightY
 
-        gazeX = (leftX + rightX) / 2f
-        gazeY = (leftY + rightY) / 2f
+        val rawX =
+            (leftX + rightX) / 2f
+
+        val rawY =
+            (leftY + rightY) / 2f
 
         /*
-         * Convert MediaPipe coordinates
-         * into a simple -1 to +1 range.
+         * Exponential moving average.
          *
-         * 0.5 is approximately the centre.
+         * Smaller number = smoother but slower.
+         * Larger number = faster but more jitter.
          */
+
+        val smoothing = 0.20f
+
+        if (!initialized) {
+
+            smoothX = rawX
+            smoothY = rawY
+
+            initialized = true
+
+        } else {
+
+            smoothX =
+                smoothX +
+                smoothing * (rawX - smoothX)
+
+            smoothY =
+                smoothY +
+                smoothing * (rawY - smoothY)
+        }
+
+        gazeX = smoothX
+        gazeY = smoothY
 
         gazeHorizontal =
             ((gazeX - 0.5f) * 2f)
@@ -82,6 +115,7 @@ object EyeNavState {
     fun setError(
         message: String
     ) {
+
         errorMessage = message
     }
 }
