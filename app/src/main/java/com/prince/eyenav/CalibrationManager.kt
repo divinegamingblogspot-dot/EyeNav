@@ -72,11 +72,11 @@ object CalibrationManager {
 
                 screenX =
                     target.first *
-                    screenWidth,
+                        screenWidth,
 
                 screenY =
                     target.second *
-                    screenHeight
+                        screenHeight
             )
         )
 
@@ -137,19 +137,19 @@ object CalibrationManager {
 
             val distance =
                 dx * dx +
-                dy * dy
+                    dy * dy
 
             val weight =
                 1f /
-                (distance + 0.0001f)
+                    (distance + 0.0001f)
 
             weightedX +=
                 point.screenX *
-                weight
+                    weight
 
             weightedY +=
                 point.screenY *
-                weight
+                    weight
 
             totalWeight +=
                 weight
@@ -157,11 +157,11 @@ object CalibrationManager {
 
         var resultX =
             weightedX /
-            totalWeight
+                totalWeight
 
         var resultY =
             weightedY /
-            totalWeight
+                totalWeight
 
         resultX =
             resultX.coerceIn(
