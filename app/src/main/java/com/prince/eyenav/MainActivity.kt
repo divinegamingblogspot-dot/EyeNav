@@ -29,6 +29,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var eyeTracker: EyeTracker
 
     private lateinit var calibrationTarget: TextView
+    private lateinit var gazeCursor: TextView
 
     private var calibrationRunning = false
     private var calibrationStartTime = 0L
@@ -114,14 +115,9 @@ class MainActivity : AppCompatActivity() {
             TextView(this).apply {
 
                 text = "●"
-
                 textSize = 50f
-
-                gravity =
-                    Gravity.CENTER
-
-                visibility =
-                    TextView.GONE
+                gravity = Gravity.CENTER
+                visibility = TextView.GONE
             }
 
         val targetParams =
@@ -133,6 +129,26 @@ class MainActivity : AppCompatActivity() {
         container.addView(
             calibrationTarget,
             targetParams
+        )
+
+        gazeCursor =
+            TextView(this).apply {
+
+                text = "●"
+                textSize = 28f
+                gravity = Gravity.CENTER
+                visibility = TextView.GONE
+            }
+
+        val cursorParams =
+            FrameLayout.LayoutParams(
+                60,
+                60
+            )
+
+        container.addView(
+            gazeCursor,
+            cursorParams
         )
 
         val calibrationButton =
@@ -280,6 +296,12 @@ class MainActivity : AppCompatActivity() {
                 } else {
 
                     updateStatus()
+
+                    if (
+                        CalibrationManager.isCalibrated
+                    ) {
+                        updateGazeCursor()
+                    }
                 }
             }
 
@@ -351,6 +373,9 @@ class MainActivity : AppCompatActivity() {
 
         calibrationSamplesX.clear()
         calibrationSamplesY.clear()
+
+        gazeCursor.visibility =
+            TextView.GONE
 
         calibrationTarget.visibility =
             TextView.VISIBLE
@@ -476,6 +501,9 @@ class MainActivity : AppCompatActivity() {
                 calibrationTarget.visibility =
                     TextView.GONE
 
+                gazeCursor.visibility =
+                    TextView.VISIBLE
+
                 statusText.text =
                     "CALIBRATION COMPLETE ✓\n\n" +
                     "EyeNav is ready."
@@ -488,6 +516,39 @@ class MainActivity : AppCompatActivity() {
                 positionCalibrationTarget()
             }
         }
+    }
+
+    private fun updateGazeCursor() {
+
+        if (
+            previewView.width <= 0 ||
+            previewView.height <= 0
+        ) {
+            return
+        }
+
+        val position =
+            CalibrationManager.screenPosition(
+                EyeNavState.gazeX,
+                EyeNavState.gazeY,
+                previewView.width.toFloat(),
+                previewView.height.toFloat()
+            )
+
+        val params =
+            gazeCursor.layoutParams
+                as FrameLayout.LayoutParams
+
+        params.leftMargin =
+            position.first.toInt() -
+            gazeCursor.width / 2
+
+        params.topMargin =
+            position.second.toInt() -
+            gazeCursor.height / 2
+
+        gazeCursor.layoutParams =
+            params
     }
 
     override fun onDestroy() {
