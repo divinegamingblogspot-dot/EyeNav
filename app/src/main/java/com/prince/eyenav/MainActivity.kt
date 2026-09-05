@@ -5,6 +5,9 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.Gravity
+import android.view.View
+import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -16,13 +19,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.google.mediapipe.framework.image.BitmapImageBuilder
-import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
-import android.view.Gravity
-import android.view.View
-import android.widget.FrameLayout
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
@@ -113,6 +112,7 @@ class MainActivity : ComponentActivity() {
 
         gazeCursor.background =
             android.graphics.drawable.GradientDrawable().apply {
+
                 shape =
                     android.graphics.drawable.GradientDrawable.OVAL
 
@@ -123,8 +123,6 @@ class MainActivity : ComponentActivity() {
                     Color.WHITE
                 )
             }
-
-        gazeCursor.visibility = View.VISIBLE
 
         root.addView(gazeCursor)
 
@@ -214,11 +212,8 @@ class MainActivity : ComponentActivity() {
                 .setMinFaceDetectionConfidence(0.5f)
                 .setMinFacePresenceConfidence(0.5f)
                 .setMinTrackingConfidence(0.5f)
-                .setResultListener { result, timestamp ->
-                    processFaceResult(
-                        result,
-                        timestamp
-                    )
+                .setResultListener { result, _ ->
+                    processFaceResult(result)
                 }
                 .build()
 
@@ -281,6 +276,7 @@ class MainActivity : ComponentActivity() {
                 } catch (_: Exception) {
 
                 } finally {
+
                     imageProxy.close()
                 }
             }
@@ -301,8 +297,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun processFaceResult(
-        result: FaceLandmarkerResult,
-        timestamp: Long
+        result: FaceLandmarkerResult
     ) {
 
         if (result.faceLandmarks().isEmpty()) {
@@ -396,7 +391,6 @@ class MainActivity : ComponentActivity() {
                     previewView.height / 2f
 
                 hasPreviousPosition = false
-
             }
         }
     }
