@@ -3,14 +3,15 @@ package com.prince.eyenav
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.ImageProxy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -46,9 +47,12 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        cameraExecutor = Executors.newSingleThreadExecutor()
+        cameraExecutor =
+            Executors.newSingleThreadExecutor()
 
-        eyeTracker = EyeTracker(this)
+        eyeTracker =
+            EyeTracker(this)
+
         eyeTracker.setup()
 
         createInterface()
@@ -59,7 +63,7 @@ class MainActivity : AppCompatActivity() {
     private fun createInterface() {
 
         val container =
-            android.widget.FrameLayout(this)
+            FrameLayout(this)
 
         previewView =
             PreviewView(this).apply {
@@ -71,7 +75,8 @@ class MainActivity : AppCompatActivity() {
         statusText =
             TextView(this).apply {
 
-                text = "EyeNav\n\nStarting camera..."
+                text =
+                    "EyeNav\n\nStarting camera..."
 
                 textSize = 20f
 
@@ -100,7 +105,8 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
+            ) ==
+            PackageManager.PERMISSION_GRANTED
         ) {
 
             startCamera()
@@ -163,11 +169,10 @@ class MainActivity : AppCompatActivity() {
 
                 runOnUiThread {
 
-                    Toast.makeText(
-                        this,
-                        "Unable to start camera",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    statusText.text =
+                        "EyeNav\n\n" +
+                        "Camera error:\n" +
+                        exception.message
                 }
             }
 
@@ -184,7 +189,6 @@ class MainActivity : AppCompatActivity() {
                 imageProxy.image
 
             if (mediaImage == null) {
-                imageProxy.close()
                 return
             }
 
@@ -199,7 +203,6 @@ class MainActivity : AppCompatActivity() {
             )
 
             runOnUiThread {
-
                 updateStatus()
             }
 
@@ -208,7 +211,9 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
 
                 statusText.text =
-                    "EyeNav\n\nError: ${exception.message}"
+                    "EyeNav\n\n" +
+                    "Error:\n" +
+                    exception.message
             }
 
         } finally {
@@ -225,7 +230,9 @@ class MainActivity : AppCompatActivity() {
         if (error != null) {
 
             statusText.text =
-                "EyeNav\n\nMediaPipe Error:\n$error"
+                "EyeNav\n\n" +
+                "MediaPipe Error:\n" +
+                error
 
             return
         }
