@@ -30,11 +30,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var gazeCursor: View
     private lateinit var statusText: TextView
     private lateinit var dwellText: TextView
-
     private lateinit var faceLandmarker: FaceLandmarker
 
     private var calibrationRunning = true
-
     private val calibrationSamplesRequired = 50
     private var calibrationSampleCount = 0
 
@@ -112,7 +110,6 @@ class MainActivity : ComponentActivity() {
 
         gazeCursor.background =
             android.graphics.drawable.GradientDrawable().apply {
-
                 shape =
                     android.graphics.drawable.GradientDrawable.OVAL
 
@@ -131,16 +128,9 @@ class MainActivity : ComponentActivity() {
         statusText.text = "LOOK AT THE DOT"
         statusText.textSize = 20f
         statusText.setTextColor(Color.WHITE)
-
         statusText.setBackgroundColor(
-            Color.argb(
-                170,
-                0,
-                0,
-                0
-            )
+            Color.argb(170, 0, 0, 0)
         )
-
         statusText.gravity = Gravity.CENTER
 
         val statusParams =
@@ -164,16 +154,9 @@ class MainActivity : ComponentActivity() {
         dwellText.text = "DWELL: 0%"
         dwellText.textSize = 18f
         dwellText.setTextColor(Color.WHITE)
-
         dwellText.setBackgroundColor(
-            Color.argb(
-                170,
-                0,
-                0,
-                0
-            )
+            Color.argb(170, 0, 0, 0)
         )
-
         dwellText.gravity = Gravity.CENTER
 
         val dwellParams =
@@ -212,8 +195,10 @@ class MainActivity : ComponentActivity() {
                 .setMinFaceDetectionConfidence(0.5f)
                 .setMinFacePresenceConfidence(0.5f)
                 .setMinTrackingConfidence(0.5f)
-                .setResultListener { result, _ ->
-                    processFaceResult(result)
+                .setResultListener { result, timestamp ->
+                    processFaceResult(
+                        result
+                    )
                 }
                 .build()
 
@@ -269,8 +254,8 @@ class MainActivity : ComponentActivity() {
                         SystemClock.uptimeMillis()
 
                     faceLandmarker.detectAsync(
-                        timestamp,
-                        mpImage
+                        mpImage,
+                        timestamp
                     )
 
                 } catch (_: Exception) {
@@ -374,7 +359,9 @@ class MainActivity : ComponentActivity() {
 
             calibrationSampleCount = 0
 
-            if (CalibrationManager.isCalibrated) {
+            if (
+                CalibrationManager.isCalibrated
+            ) {
 
                 calibrationRunning = false
 
@@ -437,20 +424,20 @@ class MainActivity : ComponentActivity() {
 
             smoothedX +=
                 (targetX - smoothedX) *
-                smoothingFactor
+                    smoothingFactor
 
             smoothedY +=
                 (targetY - smoothedY) *
-                smoothingFactor
+                    smoothingFactor
         }
 
         gazeCursor.x =
             smoothedX -
-            gazeCursor.width / 2f
+                gazeCursor.width / 2f
 
         gazeCursor.y =
             smoothedY -
-            gazeCursor.height / 2f
+                gazeCursor.height / 2f
 
         processDwell(
             smoothedX,
@@ -479,7 +466,7 @@ class MainActivity : ComponentActivity() {
 
         val movement =
             abs(x - lastDwellX) +
-            abs(y - lastDwellY)
+                abs(y - lastDwellY)
 
         if (
             movement >
@@ -500,7 +487,7 @@ class MainActivity : ComponentActivity() {
 
         val elapsed =
             SystemClock.uptimeMillis() -
-            dwellStartTime
+                dwellStartTime
 
         val progress =
             (
@@ -514,7 +501,9 @@ class MainActivity : ComponentActivity() {
         dwellText.text =
             "DWELL: ${(progress * 100).toInt()}%"
 
-        if (elapsed >= dwellDuration) {
+        if (
+            elapsed >= dwellDuration
+        ) {
 
             performEyeClick()
 
