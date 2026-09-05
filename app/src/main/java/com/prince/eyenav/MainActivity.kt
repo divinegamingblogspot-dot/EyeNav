@@ -122,6 +122,33 @@ container.addView(
     calibrationTarget
 )
 
+val calibrationButton =
+    android.widget.Button(this).apply {
+
+        text = "START CALIBRATION"
+
+        setOnClickListener {
+            startCalibration()
+        }
+    }
+
+val buttonParams =
+    FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.WRAP_CONTENT,
+        FrameLayout.LayoutParams.WRAP_CONTENT
+    )
+
+buttonParams.gravity =
+    android.view.Gravity.BOTTOM or
+    android.view.Gravity.CENTER_HORIZONTAL
+
+buttonParams.bottomMargin = 80
+
+container.addView(
+    calibrationButton,
+    buttonParams
+)
+
         container.addView(
             statusText
         )
@@ -297,7 +324,111 @@ container.addView(
     }
 }
 
-    override fun onDestroy() {
+    }
+}
+
+private fun startCalibration() {
+
+    CalibrationManager.reset()
+    calibrationRunning = true
+    calibrationStartTime = System.currentTimeMillis()
+
+    calibrationSamplesX.clear()
+    calibrationSamplesY.clear()
+
+    calibrationTarget.visibility = TextView.VISIBLE
+
+    positionCalibrationTarget()
+
+    statusText.text =
+        "CALIBRATION\n\nLook directly at the dot\n\nKeep your head still"
+}
+
+private fun positionCalibrationTarget() {
+
+    val position = CalibrationManager.target()
+
+    val width = previewView.width
+    val height = previewView.height
+
+    if (width <= 0 || height <= 0) return
+
+    val x = position.first * width
+    val y = position.second * height
+
+    val params =
+        calibrationTarget.layoutParams
+            as FrameLayout.LayoutParams
+
+    params.leftMargin =
+        x.toInt() - calibrationTarget.width / 2
+
+    params.topMargin =
+        y.toInt() - calibrationTarget.height / 2
+
+    calibrationTarget.layoutParams = params
+}
+
+private fun processCalibration() {
+
+    if (!calibrationRunning) return
+
+    if (!EyeNavState.faceDetected) {
+        statusText.text = "CALIBRATION\n\nFace not detected"
+        return
+    }
+
+    val elapsed =
+        System.currentTimeMillis() - calibrationStartTime
+
+    if (elapsed < 1000) {
+        statusText.text = "CALIBRATION\n\nLook at the dot..."
+        return
+    }
+
+    calibrationSamplesX.add(EyeNavState.gazeX)
+    calibrationSamplesY.add(EyeNavState.gazeY)
+
+    statusText.text =
+        "CALIBRATION\n\nPoint ${CalibrationManager.currentTarget + 1} / 9"
+
+    if (calibrationSamplesX.size >= 30) {
+
+        val averageX =
+            calibrationSamplesX.average().toFloat()
+
+        val averageY =
+            calibrationSamplesY.average().toFloat()
+
+        CalibrationManager.addPoint(
+            averageX,
+            averageY,
+            previewView.width.toFloat(),
+            previewView.height.toFloat()
+        )
+
+        calibrationSamplesX.clear()
+        calibrationSamplesY.clear()
+
+        if (CalibrationManager.isCalibrated) {
+
+            calibrationRunning = false
+            calibrationTarget.visibility = TextView.GONE
+
+            statusText.text =
+                "CALIBRATION COMPLETE ✓\n\nEyeNav is ready."
+
+        } else {
+
+            calibrationStartTime =
+                System.currentTimeMillis()
+
+            positionCalibrationTarget()
+        }
+    }
+}
+
+override fun onDestroy() {
 
         eyeTracker.close()
 
