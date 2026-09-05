@@ -14,7 +14,6 @@ object CalibrationManager {
 
     private val targetPositions =
         listOf(
-
             0.10f to 0.10f,
             0.50f to 0.10f,
             0.90f to 0.10f,
@@ -65,15 +64,11 @@ object CalibrationManager {
 
         points.add(
             CalibrationPoint(
-
                 gazeX = gazeX,
-
                 gazeY = gazeY,
-
                 screenX =
                     target.first *
                         screenWidth,
-
                 screenY =
                     target.second *
                         screenHeight
@@ -115,16 +110,15 @@ object CalibrationManager {
                 val dy =
                     it.gazeY - gazeY
 
-                dx * dx + dy * dy
+                dx * dx +
+                    dy * dy
             }
 
         val nearest =
             sortedPoints.take(4)
 
         var totalWeight = 0f
-
         var weightedX = 0f
-
         var weightedY = 0f
 
         for (point in nearest) {
@@ -151,8 +145,7 @@ object CalibrationManager {
                 point.screenY *
                     weight
 
-            totalWeight +=
-                weight
+            totalWeight += weight
         }
 
         var resultX =
