@@ -225,36 +225,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateStatus() {
+   private fun updateStatus() {
 
-        val error =
-            EyeNavState.errorMessage
+    val error =
+        EyeNavState.errorMessage
 
-        if (error != null) {
+    if (error != null) {
 
-            statusText.text =
-                "EyeNav\n\n" +
-                "MediaPipe Error:\n" +
-                error
+        statusText.text =
+            "EyeNav\n\n" +
+            "MediaPipe Error:\n" +
+            error
 
-            return
-        }
-
-        if (EyeNavState.faceDetected) {
-
-            statusText.text =
-                "EyeNav\n\n" +
-                "Face detected ✓\n\n" +
-                "Landmarks: " +
-                EyeNavState.landmarkCount
-
-        } else {
-
-            statusText.text =
-                "EyeNav\n\n" +
-                "Looking for your face..."
-        }
+        return
     }
+
+    if (EyeNavState.faceDetected) {
+
+        statusText.text =
+            "EyeNav\n\n" +
+            "FACE DETECTED ✓\n\n" +
+            "Landmarks: ${EyeNavState.landmarkCount}\n\n" +
+            "LEFT IRIS\n" +
+            "X: ${"%.3f".format(EyeNavState.leftIrisX)}\n" +
+            "Y: ${"%.3f".format(EyeNavState.leftIrisY)}\n\n" +
+            "RIGHT IRIS\n" +
+            "X: ${"%.3f".format(EyeNavState.rightIrisX)}\n" +
+            "Y: ${"%.3f".format(EyeNavState.rightIrisY)}\n\n" +
+            "GAZE\n" +
+            "X: ${"%.3f".format(EyeNavState.gazeX)}\n" +
+            "Y: ${"%.3f".format(EyeNavState.gazeY)}"
+
+    } else {
+
+        statusText.text =
+            "EyeNav\n\n" +
+            "Looking for your face..."
+    }
+}
 
     override fun onDestroy() {
 
