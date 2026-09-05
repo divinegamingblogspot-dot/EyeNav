@@ -6,11 +6,14 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -26,6 +29,7 @@ import androidx.core.content.ContextCompat
 class MainActivity : ComponentActivity() {
 
     private lateinit var preview: PreviewView
+    private lateinit var targetView: View
     private lateinit var status: TextView
     private lateinit var startButton: Button
     private lateinit var accessibilityButton: Button
@@ -59,39 +63,50 @@ class MainActivity : ComponentActivity() {
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(28, 30, 28, 24)
-            setBackgroundColor(Color.rgb(12, 12, 16))
+            setPadding(24, 24, 24, 18)
+            setBackgroundColor(Color.rgb(10, 10, 14))
         }
 
-        val title = TextView(this).apply {
+        root.addView(TextView(this).apply {
             text = "EyeNav"
             textSize = 34f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-        }
-        root.addView(title, LinearLayout.LayoutParams(-1, 70))
+        }, LinearLayout.LayoutParams(-1, 58))
 
-        val subtitle = TextView(this).apply {
+        root.addView(TextView(this).apply {
             text = "Eye-controlled Android navigation"
-            textSize = 16f
+            textSize = 15f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
-        }
-        root.addView(subtitle, LinearLayout.LayoutParams(-1, 50))
+        }, LinearLayout.LayoutParams(-1, 38))
 
+        val cameraFrame = FrameLayout(this)
         preview = PreviewView(this)
-        root.addView(
-            preview,
-            LinearLayout.LayoutParams(-1, 0).apply { weight = 1f; topMargin = 14; bottomMargin = 14 }
-        )
+        cameraFrame.addView(preview, FrameLayout.LayoutParams(-1, -1))
+
+        targetView = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.RED)
+                setStroke(4, Color.WHITE)
+            }
+            visibility = View.VISIBLE
+        }
+        cameraFrame.addView(targetView, FrameLayout.LayoutParams(42, 42))
+        root.addView(cameraFrame, LinearLayout.LayoutParams(-1, 0).apply {
+            weight = 1f
+            topMargin = 12
+            bottomMargin = 10
+        })
 
         status = TextView(this).apply {
-            textSize = 16f
+            textSize = 15f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(12, 12, 12, 12)
+            setPadding(8, 6, 8, 6)
         }
-        root.addView(status, LinearLayout.LayoutParams(-1, 70))
+        root.addView(status, LinearLayout.LayoutParams(-1, 64))
 
         accessibilityButton = button("Enable Accessibility") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -100,38 +115,28 @@ class MainActivity : ComponentActivity() {
 
         overlayButton = button("Allow Floating Cursor") {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                startActivity(
-                    Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                )
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             }
         }
         root.addView(overlayButton)
 
-        startButton = button("Start EyeNav") {
-            startEyeNav()
-        }
+        startButton = button("Start EyeNav") { startEyeNav() }
         root.addView(startButton)
 
-        val recalibrate = button("Recalibrate") {
+        root.addView(button("Recalibrate") {
             CalibrationManager.reset(this)
             calibrationSamples = 0
-            calibrationActive = true
             startCalibrationCamera()
-        }
-        root.addView(recalibrate)
+        })
 
         setContentView(root)
     }
 
     private fun button(label: String, action: () -> Unit): Button = Button(this).apply {
         text = label
-        textSize = 15f
-        setOnClickListener { action() }
+        textSize = 14f
         isAllCaps = false
-        setPadding(10, 4, 10, 4)
+        setOnClickListener { action() }
     }
 
     private fun startCalibrationCamera() {
@@ -142,7 +147,8 @@ class MainActivity : ComponentActivity() {
 
         calibrationActive = true
         calibrationSamples = 0
-        status.text = "Starting calibration..."
+        targetView.visibility = View.VISIBLE
+        status.text = "Calibration starting..."
 
         if (!::eyeTracker.isInitialized) {
             eyeTracker = EyeTracker(this)
@@ -177,12 +183,7 @@ class MainActivity : ComponentActivity() {
             }
 
             cameraProvider?.unbindAll()
-            cameraProvider?.bindToLifecycle(
-                this,
-                CameraSelector.DEFAULT_FRONT_CAMERA,
-                previewUseCase,
-                analysis
-            )
+            cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, previewUseCase, analysis)
         }, ContextCompat.getMainExecutor(this))
     }
 
@@ -191,7 +192,9 @@ class MainActivity : ComponentActivity() {
         if (preview.width <= 0 || preview.height <= 0) return
 
         val target = CalibrationManager.target()
-        status.text = "Calibration ${CalibrationManager.currentTarget + 1}/9 — look at the red target (${(target.first * 100).toInt()}%, ${(target.second * 100).toInt()}%)"
+        targetView.x = target.first * preview.width - targetView.width / 2f
+        targetView.y = target.second * preview.height - targetView.height / 2f
+        status.text = "Calibration ${CalibrationManager.currentTarget + 1}/9 — keep your head still and look at the red dot"
         calibrationSamples++
 
         if (calibrationSamples >= requiredSamples) {
@@ -200,9 +203,10 @@ class MainActivity : ComponentActivity() {
 
             if (CalibrationManager.isCalibrated) {
                 calibrationActive = false
+                targetView.visibility = View.INVISIBLE
                 CalibrationManager.save(this)
                 stopCalibrationCamera()
-                status.text = "Calibration complete. Enable the two permissions, then start EyeNav."
+                status.text = "Calibration complete. Enable Accessibility + Floating Cursor, then Start EyeNav."
                 refreshPermissionUi()
             }
         }
@@ -211,9 +215,7 @@ class MainActivity : ComponentActivity() {
     private fun stopCalibrationCamera() {
         cameraProvider?.unbindAll()
         cameraProvider = null
-        if (::eyeTracker.isInitialized) {
-            eyeTracker.close()
-        }
+        if (::eyeTracker.isInitialized) eyeTracker.close()
     }
 
     private fun startEyeNav() {
@@ -233,16 +235,18 @@ class MainActivity : ComponentActivity() {
         }
 
         stopCalibrationCamera()
-        val intent = Intent(this, EyeNavTrackingService::class.java)
-        ContextCompat.startForegroundService(this, intent)
-        Toast.makeText(this, "EyeNav started. You can leave this app now.", Toast.LENGTH_LONG).show()
+        ContextCompat.startForegroundService(this, Intent(this, EyeNavTrackingService::class.java))
+        Toast.makeText(this, "EyeNav started. Leave this app and use the red cursor.", Toast.LENGTH_LONG).show()
     }
 
     private fun isAccessibilityEnabled(): Boolean {
         val manager = getSystemService(ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
         val services = manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
         val expected = ComponentName(this, EyeNavAccessibilityService::class.java)
-        return services.any { info -> info.resolveInfo.serviceInfo.let { ComponentName(it.packageName, it.name) == expected } }
+        return services.any { info ->
+            val service = info.resolveInfo.serviceInfo
+            ComponentName(service.packageName, service.name) == expected
+        }
     }
 
     private fun refreshPermissionUi() {
@@ -251,6 +255,7 @@ class MainActivity : ComponentActivity() {
         overlayButton.text = if (overlayGranted) "Floating Cursor: ALLOWED" else "Allow Floating Cursor"
         startButton.isEnabled = CalibrationManager.isCalibrated
         if (CalibrationManager.isCalibrated && !calibrationActive) {
+            targetView.visibility = View.INVISIBLE
             status.text = "Calibration saved. Ready for EyeNav."
         }
     }
@@ -260,6 +265,10 @@ class MainActivity : ComponentActivity() {
         if (::accessibilityButton.isInitialized) refreshPermissionUi()
     }
 
-    private fun toast(message: String) =
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    override fun onDestroy() {
+        stopCalibrationCamera()
+        super.onDestroy()
+    }
+
+    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }
