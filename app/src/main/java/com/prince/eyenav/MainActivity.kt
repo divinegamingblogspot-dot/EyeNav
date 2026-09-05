@@ -195,10 +195,8 @@ class MainActivity : ComponentActivity() {
                 .setMinFaceDetectionConfidence(0.5f)
                 .setMinFacePresenceConfidence(0.5f)
                 .setMinTrackingConfidence(0.5f)
-                .setResultListener { result, timestamp ->
-                    processFaceResult(
-                        result
-                    )
+                .setResultListener { result, _ ->
+                    processFaceResult(result)
                 }
                 .build()
 
@@ -516,17 +514,10 @@ class MainActivity : ComponentActivity() {
 
     private fun performEyeClick() {
 
-    EyeNavAccessibilityService.instance?.performEyeClick(
-             smoothedX,
-             smoothedY
+        EyeNavAccessibilityService.instance?.performEyeClick(
+            smoothedX,
+            smoothedY
         )
-    }
-
-        Toast.makeText(
-            this,
-            "EYE CLICK",
-            Toast.LENGTH_SHORT
-        ).show()
     }
 
     override fun onDestroy() {
