@@ -516,6 +516,12 @@ class MainActivity : ComponentActivity() {
 
     private fun performEyeClick() {
 
+    EyeNavAccessibilityService.instance?.performEyeClick(
+             smoothedX,
+             smoothedY
+        )
+    }
+
         Toast.makeText(
             this,
             "EYE CLICK",
