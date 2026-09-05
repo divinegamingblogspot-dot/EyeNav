@@ -34,28 +34,101 @@ class EyeTracker(
                     val faces =
                         result.faceLandmarks()
 
-                    if (faces.isNotEmpty()) {
-
-                        val landmarks =
-                            faces[0]
-
-                        EyeNavState.update(
-                            true,
-                            landmarks.size
-                        )
-
-                    } else {
+                    if (faces.isEmpty()) {
 
                         EyeNavState.update(
                             false,
                             0
+                        )
+
+                        return@setResultListener
+                    }
+
+                    val landmarks =
+                        faces[0]
+
+                    EyeNavState.update(
+                        true,
+                        landmarks.size
+                    )
+
+                    if (landmarks.size >= 478) {
+
+                        /*
+                         * MediaPipe iris landmarks:
+                         *
+                         * Left iris:
+                         * 474, 475, 476, 477
+                         *
+                         * Right iris:
+                         * 469, 470, 471, 472
+                         */
+
+                        val leftIrisIndices =
+                            intArrayOf(
+                                474,
+                                475,
+                                476,
+                                477
+                            )
+
+                        val rightIrisIndices =
+                            intArrayOf(
+                                469,
+                                470,
+                                471,
+                                472
+                            )
+
+                        var leftX = 0f
+                        var leftY = 0f
+
+                        for (index in leftIrisIndices) {
+
+                            leftX +=
+                                landmarks[index].x()
+
+                            leftY +=
+                                landmarks[index].y()
+                        }
+
+                        leftX /=
+                            leftIrisIndices.size
+
+                        leftY /=
+                            leftIrisIndices.size
+
+                        var rightX = 0f
+                        var rightY = 0f
+
+                        for (index in rightIrisIndices) {
+
+                            rightX +=
+                                landmarks[index].x()
+
+                            rightY +=
+                                landmarks[index].y()
+                        }
+
+                        rightX /=
+                            rightIrisIndices.size
+
+                        rightY /=
+                            rightIrisIndices.size
+
+                        EyeNavState.updateIris(
+                            leftX,
+                            leftY,
+                            rightX,
+                            rightY
                         )
                     }
                 }
                 .setErrorListener { error ->
 
                     EyeNavState.setError(
-                        error.message ?: "MediaPipe error"
+                        error.message
+                            ?: "MediaPipe error"
                     )
                 }
                 .build()
