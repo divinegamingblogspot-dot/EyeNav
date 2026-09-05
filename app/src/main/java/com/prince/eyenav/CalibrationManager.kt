@@ -9,10 +9,12 @@ data class CalibrationPoint(
 
 object CalibrationManager {
 
-    private val points = mutableListOf<CalibrationPoint>()
+    private val points =
+        mutableListOf<CalibrationPoint>()
 
     private val targetPositions =
         listOf(
+
             0.10f to 0.10f,
             0.50f to 0.10f,
             0.90f to 0.10f,
@@ -30,18 +32,6 @@ object CalibrationManager {
         private set
 
     var isCalibrated = false
-        private set
-
-    var minGazeX = 0.3f
-        private set
-
-    var maxGazeX = 0.7f
-        private set
-
-    var minGazeY = 0.3f
-        private set
-
-    var maxGazeY = 0.7f
         private set
 
     fun reset() {
@@ -75,10 +65,18 @@ object CalibrationManager {
 
         points.add(
             CalibrationPoint(
-                gazeX,
-                gazeY,
-                target.first * screenWidth,
-                target.second * screenHeight
+
+                gazeX = gazeX,
+
+                gazeY = gazeY,
+
+                screenX =
+                    target.first *
+                    screenWidth,
+
+                screenY =
+                    target.second *
+                    screenHeight
             )
         )
 
@@ -89,37 +87,8 @@ object CalibrationManager {
             targetPositions.size
         ) {
 
-            calculateCalibration()
+            isCalibrated = true
         }
-    }
-
-    private fun calculateCalibration() {
-
-        if (points.size < 9) {
-            return
-        }
-
-        minGazeX =
-            points.minOf {
-                it.gazeX
-            }
-
-        maxGazeX =
-            points.maxOf {
-                it.gazeX
-            }
-
-        minGazeY =
-            points.minOf {
-                it.gazeY
-            }
-
-        maxGazeY =
-            points.maxOf {
-                it.gazeY
-            }
-
-        isCalibrated = true
     }
 
     fun screenPosition(
@@ -129,25 +98,86 @@ object CalibrationManager {
         height: Float
     ): Pair<Float, Float> {
 
-        val rangeX =
-            (maxGazeX - minGazeX)
-                .coerceAtLeast(0.01f)
+        if (points.size < 9) {
 
-        val rangeY =
-            (maxGazeY - minGazeY)
-                .coerceAtLeast(0.01f)
+            return Pair(
+                width / 2f,
+                height / 2f
+            )
+        }
 
-        val normalizedX =
-            ((gazeX - minGazeX) / rangeX)
-                .coerceIn(0f, 1f)
+        val sortedPoints =
+            points.sortedBy {
 
-        val normalizedY =
-            ((gazeY - minGazeY) / rangeY)
-                .coerceIn(0f, 1f)
+                val dx =
+                    it.gazeX - gazeX
+
+                val dy =
+                    it.gazeY - gazeY
+
+                dx * dx + dy * dy
+            }
+
+        val nearest =
+            sortedPoints.take(4)
+
+        var totalWeight = 0f
+
+        var weightedX = 0f
+
+        var weightedY = 0f
+
+        for (point in nearest) {
+
+            val dx =
+                point.gazeX - gazeX
+
+            val dy =
+                point.gazeY - gazeY
+
+            val distance =
+                dx * dx +
+                dy * dy
+
+            val weight =
+                1f /
+                (distance + 0.0001f)
+
+            weightedX +=
+                point.screenX *
+                weight
+
+            weightedY +=
+                point.screenY *
+                weight
+
+            totalWeight +=
+                weight
+        }
+
+        var resultX =
+            weightedX /
+            totalWeight
+
+        var resultY =
+            weightedY /
+            totalWeight
+
+        resultX =
+            resultX.coerceIn(
+                0f,
+                width
+            )
+
+        resultY =
+            resultY.coerceIn(
+                0f,
+                height
+            )
 
         return Pair(
-            normalizedX * width,
-            normalizedY * height
+            resultX,
+            resultY
         )
     }
 }
