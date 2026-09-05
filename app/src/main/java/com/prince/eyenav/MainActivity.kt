@@ -263,8 +263,13 @@ container.addView(
             )
 
             runOnUiThread {
-                updateStatus()
-            }
+
+    if (calibrationRunning) {
+        processCalibration()
+    } else {
+        updateStatus()
+    }
+}
 
         } catch (exception: Exception) {
 
