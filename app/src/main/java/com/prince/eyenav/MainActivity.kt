@@ -255,6 +255,9 @@ class MainActivity : AppCompatActivity() {
             "GAZE\n" +
             "X: ${"%.3f".format(EyeNavState.gazeX)}\n" +
             "Y: ${"%.3f".format(EyeNavState.gazeY)}"
+            "Y: ${"%.3f".format(EyeNavState.gazeY)}\n" +
+            "Horizontal: ${"%.2f".format(EyeNavState.gazeHorizontal)}\n" +
+            "Vertical: ${"%.2f".format(EyeNavState.gazeVertical)}"
 
     } else {
 
