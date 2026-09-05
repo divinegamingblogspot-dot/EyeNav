@@ -101,8 +101,26 @@ private val calibrationSamplesY =
             }
 
         container.addView(
-            previewView
-        )
+    statusText
+)
+
+calibrationTarget =
+    TextView(this).apply {
+
+        text = "●"
+
+        textSize = 50f
+
+        gravity =
+            android.view.Gravity.CENTER
+
+        visibility =
+            TextView.GONE
+    }
+
+container.addView(
+    calibrationTarget
+)
 
         container.addView(
             statusText
