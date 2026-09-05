@@ -1,5 +1,8 @@
 package com.prince.eyenav
 
+import kotlin.math.max
+import kotlin.math.min
+
 object EyeNavState {
 
     var faceDetected = false
@@ -26,6 +29,12 @@ object EyeNavState {
     var gazeY = 0f
         private set
 
+    var gazeHorizontal = 0f
+        private set
+
+    var gazeVertical = 0f
+        private set
+
     var errorMessage: String? = null
         private set
 
@@ -33,7 +42,6 @@ object EyeNavState {
         detected: Boolean,
         count: Int
     ) {
-
         faceDetected = detected
         landmarkCount = count
         errorMessage = null
@@ -52,17 +60,28 @@ object EyeNavState {
         rightIrisX = rightX
         rightIrisY = rightY
 
-        gazeX =
-            (leftX + rightX) / 2f
+        gazeX = (leftX + rightX) / 2f
+        gazeY = (leftY + rightY) / 2f
 
-        gazeY =
-            (leftY + rightY) / 2f
+        /*
+         * Convert MediaPipe coordinates
+         * into a simple -1 to +1 range.
+         *
+         * 0.5 is approximately the centre.
+         */
+
+        gazeHorizontal =
+            ((gazeX - 0.5f) * 2f)
+                .coerceIn(-1f, 1f)
+
+        gazeVertical =
+            ((gazeY - 0.5f) * 2f)
+                .coerceIn(-1f, 1f)
     }
 
     fun setError(
         message: String
     ) {
-
         errorMessage = message
     }
 }
