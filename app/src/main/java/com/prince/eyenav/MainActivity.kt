@@ -28,6 +28,18 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var eyeTracker: EyeTracker
 
+    private lateinit var calibrationTarget: TextView
+
+private var calibrationRunning = false
+
+private var calibrationStartTime = 0L
+
+private val calibrationSamplesX =
+    mutableListOf<Float>()
+
+private val calibrationSamplesY =
+    mutableListOf<Float>()
+
     private val cameraPermissionLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
