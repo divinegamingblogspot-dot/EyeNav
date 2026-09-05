@@ -1,13 +1,17 @@
 package com.prince.eyenav
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.ComponentName
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
-import android.os.SystemClock
+import android.provider.Settings
 import android.view.Gravity
-import android.view.View
-import android.widget.FrameLayout
+import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -18,514 +22,244 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import com.google.mediapipe.framework.image.BitmapImageBuilder
-import com.google.mediapipe.tasks.vision.core.RunningMode
-import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
-import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
-import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var previewView: PreviewView
-    private lateinit var gazeCursor: View
-    private lateinit var statusText: TextView
-    private lateinit var dwellText: TextView
-    private lateinit var faceLandmarker: FaceLandmarker
+    private lateinit var preview: PreviewView
+    private lateinit var status: TextView
+    private lateinit var startButton: Button
+    private lateinit var accessibilityButton: Button
+    private lateinit var overlayButton: Button
 
-    private var calibrationRunning = true
-    private val calibrationSamplesRequired = 50
-    private var calibrationSampleCount = 0
+    private lateinit var eyeTracker: EyeTracker
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var calibrationSamples = 0
+    private val requiredSamples = 55
+    private var calibrationActive = false
 
-    private var smoothedX = 0f
-    private var smoothedY = 0f
-    private var hasPreviousPosition = false
-
-    private val smoothingFactor = 0.08f
-
-    private var dwellStartTime = 0L
-    private var lastDwellX = 0f
-    private var lastDwellY = 0f
-
-    private val dwellDuration = 800L
-    private val dwellMovementTolerance = 30f
-
-    private val cameraPermissionLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { granted ->
-            if (granted) {
-                startCamera()
-            } else {
-                Toast.makeText(
-                    this,
-                    "Camera permission required",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
+    private val cameraPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) startCalibrationCamera() else toast("Camera permission is required")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CalibrationManager.load(this)
+        buildUi()
+        refreshPermissionUi()
 
-        createUI()
-        setupFaceLandmarker()
-
-        if (
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            startCamera()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            if (!CalibrationManager.isCalibrated) startCalibrationCamera()
         } else {
-            cameraPermissionLauncher.launch(
-                Manifest.permission.CAMERA
-            )
+            cameraPermission.launch(Manifest.permission.CAMERA)
         }
     }
 
-    private fun createUI() {
+    private fun buildUi() {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(28, 30, 28, 24)
+            setBackgroundColor(Color.rgb(12, 12, 16))
+        }
 
-        val root = FrameLayout(this)
+        val title = TextView(this).apply {
+            text = "EyeNav"
+            textSize = 34f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        }
+        root.addView(title, LinearLayout.LayoutParams(-1, 70))
 
-        previewView = PreviewView(this)
+        val subtitle = TextView(this).apply {
+            text = "Eye-controlled Android navigation"
+            textSize = 16f
+            setTextColor(Color.LTGRAY)
+            gravity = Gravity.CENTER
+        }
+        root.addView(subtitle, LinearLayout.LayoutParams(-1, 50))
 
+        preview = PreviewView(this)
         root.addView(
-            previewView,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
+            preview,
+            LinearLayout.LayoutParams(-1, 0).apply { weight = 1f; topMargin = 14; bottomMargin = 14 }
         )
 
-        gazeCursor = View(this)
+        status = TextView(this).apply {
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(12, 12, 12, 12)
+        }
+        root.addView(status, LinearLayout.LayoutParams(-1, 70))
 
-        val cursorSize = 45
+        accessibilityButton = button("Enable Accessibility") {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+        root.addView(accessibilityButton)
 
-        gazeCursor.layoutParams =
-            FrameLayout.LayoutParams(
-                cursorSize,
-                cursorSize
-            )
-
-        gazeCursor.background =
-            android.graphics.drawable.GradientDrawable().apply {
-                shape =
-                    android.graphics.drawable.GradientDrawable.OVAL
-
-                setColor(Color.RED)
-
-                setStroke(
-                    5,
-                    Color.WHITE
+        overlayButton = button("Allow Floating Cursor") {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
                 )
             }
+        }
+        root.addView(overlayButton)
 
-        root.addView(gazeCursor)
+        startButton = button("Start EyeNav") {
+            startEyeNav()
+        }
+        root.addView(startButton)
 
-        statusText = TextView(this)
-
-        statusText.text = "LOOK AT THE DOT"
-        statusText.textSize = 20f
-        statusText.setTextColor(Color.WHITE)
-        statusText.setBackgroundColor(
-            Color.argb(170, 0, 0, 0)
-        )
-        statusText.gravity = Gravity.CENTER
-
-        val statusParams =
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            )
-
-        statusParams.gravity =
-            Gravity.TOP or Gravity.CENTER_HORIZONTAL
-
-        statusParams.topMargin = 50
-
-        root.addView(
-            statusText,
-            statusParams
-        )
-
-        dwellText = TextView(this)
-
-        dwellText.text = "DWELL: 0%"
-        dwellText.textSize = 18f
-        dwellText.setTextColor(Color.WHITE)
-        dwellText.setBackgroundColor(
-            Color.argb(170, 0, 0, 0)
-        )
-        dwellText.gravity = Gravity.CENTER
-
-        val dwellParams =
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            )
-
-        dwellParams.gravity =
-            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-
-        dwellParams.bottomMargin = 80
-
-        root.addView(
-            dwellText,
-            dwellParams
-        )
+        val recalibrate = button("Recalibrate") {
+            CalibrationManager.reset(this)
+            calibrationSamples = 0
+            calibrationActive = true
+            startCalibrationCamera()
+        }
+        root.addView(recalibrate)
 
         setContentView(root)
     }
 
-    private fun setupFaceLandmarker() {
-
-        val baseOptions =
-            com.google.mediapipe.tasks.core.BaseOptions
-                .builder()
-                .setModelAssetPath("face_landmarker.task")
-                .build()
-
-        val options =
-            FaceLandmarker.FaceLandmarkerOptions
-                .builder()
-                .setBaseOptions(baseOptions)
-                .setRunningMode(RunningMode.LIVE_STREAM)
-                .setNumFaces(1)
-                .setMinFaceDetectionConfidence(0.5f)
-                .setMinFacePresenceConfidence(0.5f)
-                .setMinTrackingConfidence(0.5f)
-                .setResultListener { result, _ ->
-                    processFaceResult(result)
-                }
-                .build()
-
-        faceLandmarker =
-            FaceLandmarker.createFromOptions(
-                this,
-                options
-            )
+    private fun button(label: String, action: () -> Unit): Button = Button(this).apply {
+        text = label
+        textSize = 15f
+        setOnClickListener { action() }
+        isAllCaps = false
+        setPadding(10, 4, 10, 4)
     }
 
-    private fun startCamera() {
+    private fun startCalibrationCamera() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+            return
+        }
 
-        val cameraProviderFuture =
-            ProcessCameraProvider.getInstance(this)
+        calibrationActive = true
+        calibrationSamples = 0
+        status.text = "Starting calibration..."
 
-        cameraProviderFuture.addListener({
+        if (!::eyeTracker.isInitialized) {
+            eyeTracker = EyeTracker(this)
+            eyeTracker.setup()
+        }
 
-            val cameraProvider =
-                cameraProviderFuture.get()
+        val future = ProcessCameraProvider.getInstance(this)
+        future.addListener({
+            cameraProvider = future.get()
 
-            val preview =
-                Preview.Builder()
-                    .build()
+            val previewUseCase = Preview.Builder().build().also {
+                it.setSurfaceProvider(preview.surfaceProvider)
+            }
 
-            preview.setSurfaceProvider(
-                previewView.surfaceProvider
-            )
+            val analysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .build()
 
-            val imageAnalyzer =
-                ImageAnalysis.Builder()
-                    .setBackpressureStrategy(
-                        ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
-                    )
-                    .setOutputImageFormat(
-                        ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888
-                    )
-                    .build()
-
-            imageAnalyzer.setAnalyzer(
-                ContextCompat.getMainExecutor(this)
-            ) { imageProxy ->
-
+            analysis.setAnalyzer(ContextCompat.getMainExecutor(this)) { image ->
                 try {
-
-                    val bitmap =
-                        imageProxy.toBitmap()
-
-                    val mpImage =
-                        BitmapImageBuilder(bitmap)
-                            .build()
-
-                    val timestamp =
-                        SystemClock.uptimeMillis()
-
-                    faceLandmarker.detectAsync(
-                        mpImage,
-                        timestamp
+                    val bitmap = image.toBitmap()
+                    eyeTracker.processFrame(
+                        com.google.mediapipe.framework.image.BitmapImageBuilder(bitmap).build(),
+                        System.currentTimeMillis()
                     )
-
+                    processCalibrationFrame()
                 } catch (_: Exception) {
-
                 } finally {
-
-                    imageProxy.close()
+                    image.close()
                 }
             }
 
-            val cameraSelector =
-                CameraSelector.DEFAULT_FRONT_CAMERA
-
-            cameraProvider.unbindAll()
-
-            cameraProvider.bindToLifecycle(
+            cameraProvider?.unbindAll()
+            cameraProvider?.bindToLifecycle(
                 this,
-                cameraSelector,
-                preview,
-                imageAnalyzer
+                CameraSelector.DEFAULT_FRONT_CAMERA,
+                previewUseCase,
+                analysis
             )
-
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun processFaceResult(
-        result: FaceLandmarkerResult
-    ) {
+    private fun processCalibrationFrame() {
+        if (!calibrationActive || !EyeNavState.faceDetected) return
+        if (preview.width <= 0 || preview.height <= 0) return
 
-        if (result.faceLandmarks().isEmpty()) {
-            return
-        }
+        val target = CalibrationManager.target()
+        status.text = "Calibration ${CalibrationManager.currentTarget + 1}/9 — look at the red target (${(target.first * 100).toInt()}%, ${(target.second * 100).toInt()}%)"
+        calibrationSamples++
 
-        val landmarks =
-            result.faceLandmarks()[0]
+        if (calibrationSamples >= requiredSamples) {
+            CalibrationManager.addPoint(EyeNavState.gazeX, EyeNavState.gazeY)
+            calibrationSamples = 0
 
-        if (landmarks.size < 478) {
-            return
-        }
-
-        val leftEye =
-            landmarks[468]
-
-        val rightEye =
-            landmarks[473]
-
-        val gazeX =
-            (leftEye.x() + rightEye.x()) / 2f
-
-        val gazeY =
-            (leftEye.y() + rightEye.y()) / 2f
-
-        runOnUiThread {
-
-            if (calibrationRunning) {
-
-                processCalibration(
-                    gazeX,
-                    gazeY
-                )
-
-            } else {
-
-                processGaze(
-                    gazeX,
-                    gazeY
-                )
+            if (CalibrationManager.isCalibrated) {
+                calibrationActive = false
+                CalibrationManager.save(this)
+                stopCalibrationCamera()
+                status.text = "Calibration complete. Enable the two permissions, then start EyeNav."
+                refreshPermissionUi()
             }
         }
     }
 
-    private fun processCalibration(
-        gazeX: Float,
-        gazeY: Float
-    ) {
-
-        val target =
-            CalibrationManager.target()
-
-        statusText.text =
-            "LOOK AT THE DOT ${CalibrationManager.currentTarget + 1}/9"
-
-        moveCalibrationDot(
-            target.first * previewView.width,
-            target.second * previewView.height
-        )
-
-        calibrationSampleCount++
-
-        if (
-            calibrationSampleCount >=
-            calibrationSamplesRequired
-        ) {
-
-            CalibrationManager.addPoint(
-                gazeX,
-                gazeY,
-                previewView.width.toFloat(),
-                previewView.height.toFloat()
-            )
-
-            calibrationSampleCount = 0
-
-            if (
-                CalibrationManager.isCalibrated
-            ) {
-
-                calibrationRunning = false
-
-                statusText.text =
-                    "EYE TRACKING ACTIVE"
-
-                dwellText.text =
-                    "DWELL: 0%"
-
-                smoothedX =
-                    previewView.width / 2f
-
-                smoothedY =
-                    previewView.height / 2f
-
-                hasPreviousPosition = false
-            }
+    private fun stopCalibrationCamera() {
+        cameraProvider?.unbindAll()
+        cameraProvider = null
+        if (::eyeTracker.isInitialized) {
+            eyeTracker.close()
         }
     }
 
-    private fun moveCalibrationDot(
-        x: Float,
-        y: Float
-    ) {
-
-        gazeCursor.x =
-            x - gazeCursor.width / 2f
-
-        gazeCursor.y =
-            y - gazeCursor.height / 2f
-    }
-
-    private fun processGaze(
-        gazeX: Float,
-        gazeY: Float
-    ) {
-
-        val position =
-            CalibrationManager.screenPosition(
-                gazeX,
-                gazeY,
-                previewView.width.toFloat(),
-                previewView.height.toFloat()
-            )
-
-        val targetX =
-            position.first
-
-        val targetY =
-            position.second
-
-        if (!hasPreviousPosition) {
-
-            smoothedX = targetX
-            smoothedY = targetY
-
-            hasPreviousPosition = true
-
-        } else {
-
-            smoothedX +=
-                (targetX - smoothedX) *
-                    smoothingFactor
-
-            smoothedY +=
-                (targetY - smoothedY) *
-                    smoothingFactor
+    private fun startEyeNav() {
+        if (!CalibrationManager.isCalibrated) {
+            toast("Complete calibration first")
+            return
         }
-
-        gazeCursor.x =
-            smoothedX -
-                gazeCursor.width / 2f
-
-        gazeCursor.y =
-            smoothedY -
-                gazeCursor.height / 2f
-
-        processDwell(
-            smoothedX,
-            smoothedY
-        )
-    }
-
-    private fun processDwell(
-        x: Float,
-        y: Float
-    ) {
-
-        if (dwellStartTime == 0L) {
-
-            dwellStartTime =
-                SystemClock.uptimeMillis()
-
-            lastDwellX = x
-            lastDwellY = y
-
-            dwellText.text =
-                "DWELL: 0%"
-
+        if (!isAccessibilityEnabled()) {
+            toast("Enable EyeNav Accessibility Service first")
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            toast("Allow EyeNav to display over other apps first")
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             return
         }
 
-        val movement =
-            abs(x - lastDwellX) +
-                abs(y - lastDwellY)
+        stopCalibrationCamera()
+        val intent = Intent(this, EyeNavTrackingService::class.java)
+        ContextCompat.startForegroundService(this, intent)
+        Toast.makeText(this, "EyeNav started. You can leave this app now.", Toast.LENGTH_LONG).show()
+    }
 
-        if (
-            movement >
-            dwellMovementTolerance
-        ) {
+    private fun isAccessibilityEnabled(): Boolean {
+        val manager = getSystemService(ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
+        val services = manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+        val expected = ComponentName(this, EyeNavAccessibilityService::class.java)
+        return services.any { info -> info.resolveInfo.serviceInfo.let { ComponentName(it.packageName, it.name) == expected } }
+    }
 
-            dwellStartTime =
-                SystemClock.uptimeMillis()
-
-            lastDwellX = x
-            lastDwellY = y
-
-            dwellText.text =
-                "DWELL: 0%"
-
-            return
-        }
-
-        val elapsed =
-            SystemClock.uptimeMillis() -
-                dwellStartTime
-
-        val progress =
-            (
-                elapsed.toFloat() /
-                    dwellDuration.toFloat()
-                ).coerceIn(
-                    0f,
-                    1f
-                )
-
-        dwellText.text =
-            "DWELL: ${(progress * 100).toInt()}%"
-
-        if (
-            elapsed >= dwellDuration
-        ) {
-
-            performEyeClick()
-
-            dwellStartTime = 0L
-
-            dwellText.text =
-                "DWELL: 0%"
+    private fun refreshPermissionUi() {
+        accessibilityButton.text = if (isAccessibilityEnabled()) "Accessibility: ENABLED" else "Enable Accessibility"
+        val overlayGranted = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
+        overlayButton.text = if (overlayGranted) "Floating Cursor: ALLOWED" else "Allow Floating Cursor"
+        startButton.isEnabled = CalibrationManager.isCalibrated
+        if (CalibrationManager.isCalibrated && !calibrationActive) {
+            status.text = "Calibration saved. Ready for EyeNav."
         }
     }
 
-    private fun performEyeClick() {
-
-        EyeNavAccessibilityService.instance?.performEyeClick(
-            smoothedX,
-            smoothedY
-        )
+    override fun onResume() {
+        super.onResume()
+        if (::accessibilityButton.isInitialized) refreshPermissionUi()
     }
 
-    override fun onDestroy() {
-
-        super.onDestroy()
-
-        if (::faceLandmarker.isInitialized) {
-            faceLandmarker.close()
-        }
-    }
+    private fun toast(message: String) =
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }
