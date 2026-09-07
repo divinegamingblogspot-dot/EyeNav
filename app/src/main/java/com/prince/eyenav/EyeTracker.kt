@@ -23,9 +23,6 @@ class EyeTracker(private val context: Context) {
             .setModelAssetPath("face_landmarker.task")
             .build()
 
-        // LIVE_STREAM is intentionally restored here. This was the responsive pipeline that
-        // produced continuous gaze updates. IMAGE mode made the tracking loop effectively
-        // synchronous and introduced the current "stuck" behaviour on-device.
         val options = FaceLandmarker.FaceLandmarkerOptions.builder()
             .setBaseOptions(baseOptions)
             .setRunningMode(RunningMode.LIVE_STREAM)
@@ -84,7 +81,7 @@ class EyeTracker(private val context: Context) {
     }
 
     @Synchronized
-    fun processFrame(image: MPImage, timestampMs: Long) {
+    fun processFrame(image: MPImage, timestampMs: Long = System.nanoTime() / 1_000_000L) {
         if (closed.get()) return
         val safeTimestamp = maxOf(timestampMs, lastTimestampMs + 1L)
         lastTimestampMs = safeTimestamp
