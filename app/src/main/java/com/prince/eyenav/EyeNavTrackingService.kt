@@ -3,11 +3,10 @@ package com.prince.eyenav
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.Service
 import android.content.Intent
-import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
+import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -15,6 +14,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import com.google.mediapipe.framework.image.BitmapImageBuilder
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import kotlin.math.abs
 
 class EyeNavTrackingService : LifecycleService() {
@@ -29,6 +30,8 @@ class EyeNavTrackingService : LifecycleService() {
     private lateinit var overlay: EyeNavOverlay
     private val handler = Handler(Looper.getMainLooper())
     private var cameraProvider: ProcessCameraProvider? = null
+    private var analysis: ImageAnalysis? = null
+    private var cameraExecutor: ExecutorService? = null
 
     private var smoothedX = 0f
     private var smoothedY = 0f
@@ -72,30 +75,35 @@ class EyeNavTrackingService : LifecycleService() {
             try {
                 val provider = future.get()
                 cameraProvider = provider
+                cameraExecutor = Executors.newSingleThreadExecutor()
 
-                val analysis = ImageAnalysis.Builder()
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setTargetResolution(Size(640, 480))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build()
 
-                analysis.setAnalyzer(ContextCompat.getMainExecutor(this)) { image ->
+                analysis = imageAnalysis
+                imageAnalysis.setAnalyzer(cameraExecutor!!, ImageAnalysis.Analyzer { image ->
                     try {
-                        val bitmap: Bitmap = image.toBitmap()
+                        val bitmap = image.toBitmap()
                         val mpImage = BitmapImageBuilder(bitmap).build()
-                        eyeTracker.processFrame(mpImage, System.currentTimeMillis())
+                        eyeTracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
                     } catch (_: Exception) {
+                        // Drop malformed frames; never let one frame kill the analyzer.
                     } finally {
                         image.close()
                     }
-                }
+                })
 
                 provider.unbindAll()
                 provider.bindToLifecycle(
                     this,
                     CameraSelector.DEFAULT_FRONT_CAMERA,
-                    analysis
+                    imageAnalysis
                 )
             } catch (_: Exception) {
+                // Service remains alive; a later restart can recreate the camera pipeline.
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -115,19 +123,18 @@ class EyeNavTrackingService : LifecycleService() {
             display.heightPixels.toFloat()
         )
 
-        val targetX = position.first
-        val targetY = position.second
+        val targetX = position.first.coerceIn(0f, display.widthPixels.toFloat())
+        val targetY = position.second.coerceIn(0f, display.heightPixels.toFloat())
 
         if (!initialized) {
             smoothedX = targetX
             smoothedY = targetY
             initialized = true
             dwellStart = 0L
-            return
+        } else {
+            smoothedX += (targetX - smoothedX) * smoothing
+            smoothedY += (targetY - smoothedY) * smoothing
         }
-
-        smoothedX += (targetX - smoothedX) * smoothing
-        smoothedY += (targetY - smoothedY) * smoothing
 
         overlay.moveTo(smoothedX, smoothedY)
         processDwell(smoothedX, smoothedY)
@@ -198,7 +205,12 @@ class EyeNavTrackingService : LifecycleService() {
 
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
+        analysis?.clearAnalyzer()
+        analysis = null
         cameraProvider?.unbindAll()
+        cameraProvider = null
+        cameraExecutor?.shutdownNow()
+        cameraExecutor = null
         if (::eyeTracker.isInitialized) eyeTracker.close()
         if (::overlay.isInitialized) overlay.remove()
         super.onDestroy()
