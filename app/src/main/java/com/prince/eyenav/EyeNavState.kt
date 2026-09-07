@@ -39,6 +39,26 @@ object EyeNavState {
     private var initialized = false
 
     @Synchronized
+    fun reset() {
+        faceDetected = false
+        landmarkCount = 0
+        leftIrisX = 0f
+        leftIrisY = 0f
+        rightIrisX = 0f
+        rightIrisY = 0f
+        gazeX = 0f
+        gazeY = 0f
+        gazeHorizontal = 0f
+        gazeVertical = 0f
+        errorMessage = null
+        smoothX = 0f
+        smoothY = 0f
+        initialized = false
+        // Advance the version so a newly started calibration cannot consume an old sample.
+        sampleVersion++
+    }
+
+    @Synchronized
     fun update(detected: Boolean, count: Int) {
         faceDetected = detected
         landmarkCount = count
@@ -70,6 +90,8 @@ object EyeNavState {
         gazeY = smoothY.coerceIn(0f, 1f)
         gazeHorizontal = ((gazeX - 0.5f) * 2f).coerceIn(-1f, 1f)
         gazeVertical = ((gazeY - 0.5f) * 2f).coerceIn(-1f, 1f)
+        faceDetected = true
+        errorMessage = null
         sampleVersion++
     }
 
