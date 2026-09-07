@@ -3,7 +3,6 @@ package com.prince.eyenav
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.Service
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
@@ -34,6 +33,7 @@ class EyeNavTrackingService : LifecycleService() {
     private var analysis: ImageAnalysis? = null
     private var cameraExecutor: ExecutorService? = null
     private var stopping = false
+    private var cameraStarted = false
 
     private var smoothedX = 0f
     private var smoothedY = 0f
@@ -61,6 +61,14 @@ class EyeNavTrackingService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
+        stopping = false
+        cameraStarted = false
+
+        // Calibration leaves the last valid gaze sample in memory. Never let the live cursor
+        // start from that stale point (often the last calibration target, including the bottom
+        // edge). Live tracking must begin from "no face" until a fresh camera frame arrives.
+        EyeNavState.reset()
+
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification())
 
@@ -88,7 +96,9 @@ class EyeNavTrackingService : LifecycleService() {
     }
 
     private fun startCamera(tracker: EyeTracker, executor: ExecutorService) {
-        if (stopping) return
+        if (stopping || cameraStarted) return
+        cameraStarted = true
+
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             try {
@@ -127,12 +137,14 @@ class EyeNavTrackingService : LifecycleService() {
                     imageAnalysis
                 )
             } catch (_: Exception) {
+                cameraStarted = false
                 if (!stopping) stopSelf()
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun updateCursorAndDwell() {
+        // Do not move the cursor until this service has received a fresh face/iris result.
         if (!EyeNavState.faceDetected) {
             dwellStart = 0L
             initialized = false
@@ -223,13 +235,21 @@ class EyeNavTrackingService : LifecycleService() {
             .build()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) stopSelf()
-        return START_STICKY
+        if (intent?.action == ACTION_STOP) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // EyeNav is explicitly started by the user. Do not resurrect an old camera service
+        // after Android kills the process; a fresh user start creates a clean pipeline.
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         stopping = true
+        cameraStarted = false
         handler.removeCallbacksAndMessages(null)
+        EyeNavState.reset()
 
         val oldAnalysis = analysis
         analysis = null
