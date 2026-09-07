@@ -67,7 +67,7 @@ jobs:
             --ks "$KEYSTORE" \
             --ks-pass pass:eyenav2026 \
             --key-pass pass:eyenav2026 \
-            --alias eyenav \
+            --ks-key-alias eyenav \
             --out "$APK" \
             "$APK"
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
