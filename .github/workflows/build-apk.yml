@@ -28,44 +28,33 @@ jobs:
       - name: Build APK
         run: gradle assembleDebug
 
-      - name: Sign APK for device installation
+      - name: Sign APK with persistent EyeNav key
         shell: bash
+        env:
+          EYENAV_KEYSTORE_B64: REPLACE_WITH_PERSISTENT_KEY
         run: |
           set -euo pipefail
 
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
           BUILD_TOOLS="$(find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-
-          test -x "$BUILD_TOOLS/apksigner"
-          test -x "$BUILD_TOOLS/zipalign"
-
-          KEYSTORE="$RUNNER_TEMP/eyenav-debug.keystore"
           APK="app/build/outputs/apk/debug/app-debug.apk"
+          KEYSTORE="$RUNNER_TEMP/eyenav-release.jks"
           ALIGNED="$RUNNER_TEMP/app-debug-aligned.apk"
 
-          keytool -genkeypair \
-            -keystore "$KEYSTORE" \
-            -storepass android \
-            -keypass android \
-            -alias androiddebugkey \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US" \
-            -noprompt
+          printf '%s' "$EYENAV_KEYSTORE_B64" | base64 --decode > "$KEYSTORE"
 
           "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" "$ALIGNED"
           mv "$ALIGNED" "$APK"
 
           "$BUILD_TOOLS/apksigner" sign \
             --ks "$KEYSTORE" \
-            --ks-pass pass:android \
-            --key-pass pass:android \
+            --ks-pass pass:eyenav2026 \
+            --key-pass pass:eyenav2026 \
+            --alias eyenav \
             --out "$APK" \
             "$APK"
 
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
-
           echo "Signed APK: $APK"
           ls -lh "$APK"
 
