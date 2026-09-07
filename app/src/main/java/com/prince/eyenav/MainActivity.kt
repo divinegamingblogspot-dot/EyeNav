@@ -28,6 +28,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import com.google.mediapipe.framework.image.BitmapImageBuilder
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -41,10 +42,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var accessibilityButton: Button
     private lateinit var overlayButton: Button
 
-    private lateinit var eyeTracker: EyeTracker
+    private var eyeTracker: EyeTracker? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private var analysis: ImageAnalysis? = null
     private var cameraExecutor: ExecutorService? = null
+    private var cameraGeneration = 0L
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var calibrationSamples = 0
@@ -175,14 +177,16 @@ class MainActivity : ComponentActivity() {
         calibrationActive = false
         mainHandler.removeCallbacks(calibrationTicker)
         stopService(Intent(this, EyeNavTrackingService::class.java))
-        releaseCameraForRecalibration()
+        stopCameraAsync()
 
+        // CameraX releases are asynchronous. Give the tracking service and analyzer time to
+        // finish before creating a fresh calibration camera session.
         mainHandler.postDelayed({
             if (destroying) return@postDelayed
-            calibrationStartPending = false
             CalibrationManager.reset(this)
+            calibrationStartPending = false
             beginCalibration()
-        }, 500L)
+        }, 1000L)
     }
 
     private fun beginCalibration() {
@@ -199,7 +203,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startCalibrationCamera() {
-        if (destroying) return
+        if (destroying || !calibrationActive) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             cameraPermission.launch(Manifest.permission.CAMERA)
             return
@@ -211,61 +215,89 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        calibrationActive = true
-        targetView.visibility = View.VISIBLE
-        preview.visibility = View.VISIBLE
-        status.text = "Calibration starting..."
+        val generation = ++cameraGeneration
+        val executor = Executors.newSingleThreadExecutor()
+        cameraExecutor = executor
+        val tracker = EyeTracker(this)
+        eyeTracker = tracker
+        status.text = "Preparing camera..."
 
-        eyeTracker = EyeTracker(this)
-        eyeTracker.setup()
-        cameraExecutor = Executors.newSingleThreadExecutor()
-
-        val future = ProcessCameraProvider.getInstance(this)
-        future.addListener({
-            if (destroying) return@addListener
+        // MediaPipe model creation is expensive. Never create it on the UI thread.
+        executor.execute {
             try {
-                val provider = future.get()
-                cameraProvider = provider
+                tracker.setup()
+            } catch (_: Exception) {
+                mainHandler.post {
+                    if (!destroying && generation == cameraGeneration) {
+                        status.text = "Eye tracker could not start. Tap Recalibrate to retry."
+                    }
+                }
+                return@execute
+            }
 
-                val previewUseCase = Preview.Builder().build().also {
-                    it.setSurfaceProvider(preview.surfaceProvider)
+            mainHandler.post {
+                if (destroying || generation != cameraGeneration || !calibrationActive) {
+                    executor.execute { runCatching { tracker.close() }; executor.shutdown() }
+                    return@post
                 }
 
-                val imageAnalysis = ImageAnalysis.Builder()
-                    .setTargetResolution(Size(640, 480))
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                    .build()
-
-                analysis = imageAnalysis
-                val executor = cameraExecutor ?: return@addListener
-                imageAnalysis.setAnalyzer(executor, ImageAnalysis.Analyzer { image ->
+                val future = ProcessCameraProvider.getInstance(this)
+                future.addListener({
                     try {
-                        if (!destroying && ::eyeTracker.isInitialized) {
-                            val bitmap = image.toBitmap()
-                            val mpImage = com.google.mediapipe.framework.image.BitmapImageBuilder(bitmap).build()
-                            eyeTracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
+                        val provider = future.get()
+                        if (destroying || generation != cameraGeneration || !calibrationActive) {
+                            provider.unbindAll()
+                            return@addListener
                         }
+                        cameraProvider = provider
+
+                        val previewUseCase = Preview.Builder().build().also {
+                            it.setSurfaceProvider(preview.surfaceProvider)
+                        }
+
+                        val imageAnalysis = ImageAnalysis.Builder()
+                            .setTargetResolution(Size(640, 480))
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                            .build()
+
+                        analysis = imageAnalysis
+                        imageAnalysis.setAnalyzer(executor, ImageAnalysis.Analyzer { image ->
+                            try {
+                                if (!destroying && generation == cameraGeneration && calibrationActive) {
+                                    val bitmap = image.toBitmap()
+                                    val mpImage = BitmapImageBuilder(bitmap).build()
+                                    try {
+                                        tracker.processFrame(mpImage)
+                                    } finally {
+                                        mpImage.close()
+                                    }
+                                }
+                            } catch (_: Exception) {
+                            } finally {
+                                image.close()
+                            }
+                        })
+
+                        provider.unbindAll()
+                        provider.bindToLifecycle(
+                            this,
+                            CameraSelector.DEFAULT_FRONT_CAMERA,
+                            previewUseCase,
+                            imageAnalysis
+                        )
+
+                        status.text = "Look at the red dot. Keep your head still."
+                        mainHandler.removeCallbacks(calibrationTicker)
+                        mainHandler.post(calibrationTicker)
                     } catch (_: Exception) {
-                    } finally {
-                        image.close()
+                        if (!destroying && generation == cameraGeneration) {
+                            status.text = "Camera error. Tap Recalibrate to retry."
+                        }
                     }
-                })
-
-                provider.unbindAll()
-                provider.bindToLifecycle(
-                    this,
-                    CameraSelector.DEFAULT_FRONT_CAMERA,
-                    previewUseCase,
-                    imageAnalysis
-                )
-
-                mainHandler.removeCallbacks(calibrationTicker)
-                mainHandler.post(calibrationTicker)
-            } catch (_: Exception) {
-                if (!destroying) status.text = "Camera error. Tap Recalibrate to retry."
+                }, ContextCompat.getMainExecutor(this))
             }
-        }, ContextCompat.getMainExecutor(this))
+        }
     }
 
     private fun processCalibrationFrame() {
@@ -279,7 +311,7 @@ class MainActivity : ComponentActivity() {
         val target = CalibrationManager.target()
         targetView.x = target.first * preview.width - targetView.width / 2f
         targetView.y = target.second * preview.height - targetView.height / 2f
-        status.text = "Calibration ${CalibrationManager.currentTarget + 1}/9 — keep your head still and look at the red dot"
+        status.text = "Calibration ${CalibrationManager.currentTarget + 1}/9 — look at the red dot"
 
         gazeSumX += EyeNavState.gazeX
         gazeSumY += EyeNavState.gazeY
@@ -298,49 +330,40 @@ class MainActivity : ComponentActivity() {
                 mainHandler.removeCallbacks(calibrationTicker)
                 targetView.visibility = View.INVISIBLE
                 CalibrationManager.save(this)
-                // Keep the current camera alive. Do not close MediaPipe on the UI thread at
-                // the exact moment calibration finishes; that caused the freeze/black screen.
                 showReadyScreen()
                 refreshPermissionUi()
+                // Fully stop the calibration camera after the UI is already in its stable
+                // ready state. Teardown happens without blocking the UI on MediaPipe.close().
+                stopCameraAsync()
             }
         }
     }
 
-    private fun releaseCameraForRecalibration() {
-        analysis?.clearAnalyzer()
-        analysis = null
-        cameraProvider?.unbindAll()
-        cameraProvider = null
-
-        val oldExecutor = cameraExecutor
-        cameraExecutor = null
-        oldExecutor?.shutdownNow()
-
-        if (::eyeTracker.isInitialized) {
-            val tracker = eyeTracker
-            Executors.newSingleThreadExecutor().execute {
-                runCatching { tracker.close() }
-            }
-        }
-    }
-
-    private fun stopCalibrationCamera() {
-        calibrationActive = false
+    private fun stopCameraAsync() {
+        cameraGeneration++
         mainHandler.removeCallbacks(calibrationTicker)
-        analysis?.clearAnalyzer()
+        calibrationActive = false
+
+        val oldAnalysis = analysis
         analysis = null
-        cameraProvider?.unbindAll()
+        runCatching { oldAnalysis?.clearAnalyzer() }
+
+        val provider = cameraProvider
         cameraProvider = null
+        runCatching { provider?.unbindAll() }
 
         val oldExecutor = cameraExecutor
         cameraExecutor = null
-        oldExecutor?.shutdownNow()
+        val tracker = eyeTracker
+        eyeTracker = null
 
-        if (::eyeTracker.isInitialized) {
-            val tracker = eyeTracker
-            Executors.newSingleThreadExecutor().execute {
-                runCatching { tracker.close() }
+        if (oldExecutor != null) {
+            oldExecutor.execute {
+                runCatching { tracker?.close() }
+                oldExecutor.shutdown()
             }
+        } else {
+            tracker?.close()
         }
     }
 
@@ -360,7 +383,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        stopCalibrationCamera()
+        stopCameraAsync()
         ContextCompat.startForegroundService(this, Intent(this, EyeNavTrackingService::class.java))
         Toast.makeText(this, "EyeNav started. Leave this app and use the red cursor.", Toast.LENGTH_LONG).show()
     }
@@ -391,7 +414,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         destroying = true
         mainHandler.removeCallbacksAndMessages(null)
-        stopCalibrationCamera()
+        stopCameraAsync()
         super.onDestroy()
     }
 
