@@ -19,7 +19,6 @@ import java.util.concurrent.Executors
 import kotlin.math.abs
 
 class EyeNavTrackingService : LifecycleService() {
-
     companion object {
         const val ACTION_STOP = "com.prince.eyenav.STOP"
         private const val CHANNEL_ID = "eyenav_tracking"
@@ -33,6 +32,7 @@ class EyeNavTrackingService : LifecycleService() {
     private var analysis: ImageAnalysis? = null
     private var cameraExecutor: ExecutorService? = null
     private var stopping = false
+    private var started = false
 
     private var smoothedX = 0f
     private var smoothedY = 0f
@@ -43,7 +43,7 @@ class EyeNavTrackingService : LifecycleService() {
     private var lastClick = 0L
     private var clickArmed = true
 
-    private val smoothing = 0.38f
+    private val smoothing = 0.58f
     private val dwellDuration = 1400L
     private val dwellTolerance = 20f
     private val clickCooldown = 1200L
@@ -62,41 +62,48 @@ class EyeNavTrackingService : LifecycleService() {
         super.onCreate()
         stopping = false
         EyeNavState.reset()
-
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification())
-
         CalibrationManager.load(this)
-        eyeTracker = EyeTracker(this)
-        eyeTracker.setup()
+
         overlay = EyeNavOverlay(this)
         overlay.show()
         handler.post(ticker)
-        startCamera()
+
+        // FaceLandmarker creation is expensive. Never do it on Android's main thread.
+        val executor = Executors.newSingleThreadExecutor()
+        cameraExecutor = executor
+        executor.execute {
+            try {
+                if (stopping) return@execute
+                eyeTracker = EyeTracker(this)
+                eyeTracker.setup()
+                started = true
+                startCamera()
+            } catch (t: Throwable) {
+                EyeNavState.setError(t.message ?: "Eye tracker could not start")
+                if (!stopping) handler.post { stopSelf() }
+            }
+        }
     }
 
     private fun startCamera() {
-        val executor = Executors.newSingleThreadExecutor()
-        cameraExecutor = executor
-
+        val executor = cameraExecutor ?: return
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             try {
-                if (stopping) return@addListener
-
+                if (stopping || !started) return@addListener
                 val provider = future.get()
                 cameraProvider = provider
-
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setTargetResolution(Size(640, 480))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build()
-
                 analysis = imageAnalysis
                 imageAnalysis.setAnalyzer(executor, ImageAnalysis.Analyzer { image ->
                     try {
-                        if (!stopping) {
+                        if (!stopping && started) {
                             val bitmap = image.toBitmap()
                             val mpImage = BitmapImageBuilder(bitmap).build()
                             try {
@@ -105,20 +112,17 @@ class EyeNavTrackingService : LifecycleService() {
                                 mpImage.close()
                             }
                         }
-                    } catch (_: Exception) {
+                    } catch (t: Throwable) {
+                        if (!stopping) EyeNavState.setError(t.message ?: "Frame processing error")
                     } finally {
                         image.close()
                     }
                 })
-
                 provider.unbindAll()
-                provider.bindToLifecycle(
-                    this,
-                    CameraSelector.DEFAULT_FRONT_CAMERA,
-                    imageAnalysis
-                )
-            } catch (_: Exception) {
-                if (!stopping) stopSelf()
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, imageAnalysis)
+            } catch (t: Throwable) {
+                EyeNavState.setError(t.message ?: "Camera error")
+                if (!stopping) handler.post { stopSelf() }
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -126,10 +130,8 @@ class EyeNavTrackingService : LifecycleService() {
     private fun updateCursorAndDwell() {
         if (!EyeNavState.faceDetected) {
             dwellStart = 0L
-            initialized = false
             return
         }
-
         val display = resources.displayMetrics
         val position = CalibrationManager.screenPosition(
             EyeNavState.gazeX,
@@ -137,10 +139,8 @@ class EyeNavTrackingService : LifecycleService() {
             display.widthPixels.toFloat(),
             display.heightPixels.toFloat()
         )
-
         val targetX = position.first.coerceIn(0f, display.widthPixels.toFloat())
         val targetY = position.second.coerceIn(0f, display.heightPixels.toFloat())
-
         if (!initialized) {
             smoothedX = targetX
             smoothedY = targetY
@@ -150,14 +150,12 @@ class EyeNavTrackingService : LifecycleService() {
             smoothedX += (targetX - smoothedX) * smoothing
             smoothedY += (targetY - smoothedY) * smoothing
         }
-
         overlay.moveTo(smoothedX, smoothedY)
         processDwell(smoothedX, smoothedY)
     }
 
     private fun processDwell(x: Float, y: Float) {
         val now = System.currentTimeMillis()
-
         if (!clickArmed) {
             val distanceFromClickPoint = abs(x - dwellX) + abs(y - dwellY)
             if (distanceFromClickPoint >= rearmDistance && now - lastClick >= clickCooldown) {
@@ -168,14 +166,12 @@ class EyeNavTrackingService : LifecycleService() {
             }
             return
         }
-
         if (dwellStart == 0L) {
             dwellStart = now
             dwellX = x
             dwellY = y
             return
         }
-
         val movement = abs(x - dwellX) + abs(y - dwellY)
         if (movement > dwellTolerance) {
             dwellStart = now
@@ -183,7 +179,6 @@ class EyeNavTrackingService : LifecycleService() {
             dwellY = y
             return
         }
-
         if (now - dwellStart >= dwellDuration && now - lastClick >= clickCooldown) {
             EyeNavAccessibilityService.instance?.performEyeClick(x, y)
             lastClick = now
@@ -196,22 +191,17 @@ class EyeNavTrackingService : LifecycleService() {
 
     private fun createNotificationChannel() {
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_ID,
-                "EyeNav eye tracking",
-                NotificationManager.IMPORTANCE_LOW
-            )
-        )
+        manager.createNotificationChannel(NotificationChannel(
+            CHANNEL_ID, "EyeNav eye tracking", NotificationManager.IMPORTANCE_LOW
+        ))
     }
 
-    private fun notification(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("EyeNav is active")
-            .setContentText("Eye tracking and system cursor are running")
-            .setSmallIcon(android.R.drawable.ic_menu_view)
-            .setOngoing(true)
-            .build()
+    private fun notification(): Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setContentTitle("EyeNav is active")
+        .setContentText("Eye tracking and system cursor are running")
+        .setSmallIcon(android.R.drawable.ic_menu_view)
+        .setOngoing(true)
+        .build()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -223,37 +213,26 @@ class EyeNavTrackingService : LifecycleService() {
 
     override fun onDestroy() {
         stopping = true
+        started = false
         handler.removeCallbacksAndMessages(null)
         EyeNavState.reset()
-
         val oldAnalysis = analysis
         analysis = null
         runCatching { oldAnalysis?.clearAnalyzer() }
-
         val provider = cameraProvider
         cameraProvider = null
         runCatching { provider?.unbindAll() }
-
         val executor = cameraExecutor
         cameraExecutor = null
-        val tracker = eyeTracker
-        val cursor = overlay
-
-        // FaceLandmarker.close() can wait for the live-stream worker. Never execute that
-        // potentially blocking shutdown on Android's main thread; it was causing the
-        // freeze/black-screen when recalibrating or reopening EyeNav.
         if (executor != null) {
-            runCatching {
-                executor.execute {
-                    runCatching { tracker.close() }
-                    executor.shutdown()
-                }
+            executor.execute {
+                runCatching { if (::eyeTracker.isInitialized) eyeTracker.close() }
+                executor.shutdown()
             }
-        } else {
-            runCatching { tracker.close() }
+        } else if (::eyeTracker.isInitialized) {
+            runCatching { eyeTracker.close() }
         }
-
-        runCatching { cursor.remove() }
+        runCatching { overlay.remove() }
         super.onDestroy()
     }
 }
