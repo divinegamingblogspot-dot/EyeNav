@@ -7,13 +7,10 @@ on:
       - main
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -30,6 +27,47 @@ jobs:
 
       - name: Build APK
         run: gradle assembleDebug
+
+      - name: Sign APK for device installation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
+          BUILD_TOOLS="$(find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+
+          test -x "$BUILD_TOOLS/apksigner"
+          test -x "$BUILD_TOOLS/zipalign"
+
+          KEYSTORE="$RUNNER_TEMP/eyenav-debug.keystore"
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          ALIGNED="$RUNNER_TEMP/app-debug-aligned.apk"
+
+          keytool -genkeypair \
+            -keystore "$KEYSTORE" \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -noprompt
+
+          "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" "$ALIGNED"
+          mv "$ALIGNED" "$APK"
+
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$KEYSTORE" \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "$APK" \
+            "$APK"
+
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
+
+          echo "Signed APK: $APK"
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
