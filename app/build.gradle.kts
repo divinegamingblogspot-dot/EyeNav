@@ -15,8 +15,8 @@ android {
         applicationId = "com.prince.eyenav"
         minSdk = 29
         targetSdk = 36
-        versionCode = 4
-        versionName = "4.0"
+        versionCode = 5
+        versionName = "5.0"
     }
 }
 
