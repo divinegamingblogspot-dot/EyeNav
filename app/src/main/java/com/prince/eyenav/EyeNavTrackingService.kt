@@ -3,6 +3,7 @@ package com.prince.eyenav
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Service
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
@@ -90,7 +91,6 @@ class EyeNavTrackingService : LifecycleService() {
                         val mpImage = BitmapImageBuilder(bitmap).build()
                         eyeTracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
                     } catch (_: Exception) {
-                        // Drop malformed frames; never let one frame kill the analyzer.
                     } finally {
                         image.close()
                     }
@@ -103,7 +103,6 @@ class EyeNavTrackingService : LifecycleService() {
                     imageAnalysis
                 )
             } catch (_: Exception) {
-                // Service remains alive; a later restart can recreate the camera pipeline.
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -200,7 +199,7 @@ class EyeNavTrackingService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) stopSelf()
-        return Service.START_STICKY
+        return START_STICKY
     }
 
     override fun onDestroy() {
