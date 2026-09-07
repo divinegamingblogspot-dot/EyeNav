@@ -43,7 +43,6 @@ class EyeNavTrackingService : LifecycleService() {
     private var lastClick = 0L
     private var clickArmed = true
 
-    // Keep the cursor responsive. The previous 0.18 smoothing made movement appear frozen.
     private val smoothing = 0.38f
     private val dwellDuration = 1400L
     private val dwellTolerance = 20f
@@ -107,7 +106,6 @@ class EyeNavTrackingService : LifecycleService() {
                             }
                         }
                     } catch (_: Exception) {
-                        // Keep the camera/analyzer alive after an individual bad frame.
                     } finally {
                         image.close()
                     }
@@ -225,19 +223,37 @@ class EyeNavTrackingService : LifecycleService() {
 
     override fun onDestroy() {
         stopping = true
-        handler.removeCallbacks(ticker)
+        handler.removeCallbacksAndMessages(null)
         EyeNavState.reset()
 
-        analysis?.clearAnalyzer()
+        val oldAnalysis = analysis
         analysis = null
-        cameraProvider?.unbindAll()
+        runCatching { oldAnalysis?.clearAnalyzer() }
+
+        val provider = cameraProvider
         cameraProvider = null
+        runCatching { provider?.unbindAll() }
 
-        cameraExecutor?.shutdownNow()
+        val executor = cameraExecutor
         cameraExecutor = null
+        val tracker = eyeTracker
+        val cursor = overlay
 
-        if (::eyeTracker.isInitialized) eyeTracker.close()
-        if (::overlay.isInitialized) overlay.remove()
+        // FaceLandmarker.close() can wait for the live-stream worker. Never execute that
+        // potentially blocking shutdown on Android's main thread; it was causing the
+        // freeze/black-screen when recalibrating or reopening EyeNav.
+        if (executor != null) {
+            runCatching {
+                executor.execute {
+                    runCatching { tracker.close() }
+                    executor.shutdown()
+                }
+            }
+        } else {
+            runCatching { tracker.close() }
+        }
+
+        runCatching { cursor.remove() }
         super.onDestroy()
     }
 }
