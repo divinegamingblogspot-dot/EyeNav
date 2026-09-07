@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
     private var gazeSumX = 0f
     private var gazeSumY = 0f
     private var lastCalibrationSampleVersion = -1L
+    private var calibrationStartPending = false
 
     private val calibrationTicker = object : Runnable {
         override fun run() {
@@ -145,8 +146,9 @@ class MainActivity : ComponentActivity() {
         root.addView(startButton)
 
         root.addView(button("Recalibrate") {
-            CalibrationManager.reset(this)
-            beginCalibration()
+            // Never let MainActivity and the foreground tracking service own the camera together.
+            // That race was the cause of the black/frozen preview during recalibration.
+            stopTrackingServiceForCalibration()
         })
 
         setContentView(root)
@@ -159,6 +161,23 @@ class MainActivity : ComponentActivity() {
         setOnClickListener { action() }
     }
 
+    private fun stopTrackingServiceForCalibration() {
+        if (calibrationStartPending) return
+        calibrationStartPending = true
+        calibrationActive = false
+        mainHandler.removeCallbacks(calibrationTicker)
+
+        stopService(Intent(this, EyeNavTrackingService::class.java))
+        stopCalibrationCamera()
+
+        // Give CameraX/MediaPipe a moment to release the old camera before opening it again.
+        mainHandler.postDelayed({
+            calibrationStartPending = false
+            CalibrationManager.reset(this)
+            beginCalibration()
+        }, 350L)
+    }
+
     private fun beginCalibration() {
         calibrationActive = true
         calibrationSamples = 0
@@ -168,8 +187,6 @@ class MainActivity : ComponentActivity() {
         targetView.visibility = View.VISIBLE
         status.text = "Calibration starting..."
 
-        // IMPORTANT: if the camera is already running, do not unbind/rebind it.
-        // Rebinding while MediaPipe is processing a live frame was causing black/frozen previews.
         if (cameraProvider != null && ::eyeTracker.isInitialized) {
             mainHandler.removeCallbacks(calibrationTicker)
             mainHandler.post(calibrationTicker)
@@ -226,7 +243,6 @@ class MainActivity : ComponentActivity() {
                         val mpImage = com.google.mediapipe.framework.image.BitmapImageBuilder(bitmap).build()
                         eyeTracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
                     } catch (_: Exception) {
-                        // Keep the camera alive even if one frame is malformed.
                     } finally {
                         image.close()
                     }
@@ -242,7 +258,7 @@ class MainActivity : ComponentActivity() {
 
                 mainHandler.removeCallbacks(calibrationTicker)
                 mainHandler.post(calibrationTicker)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 status.text = "Camera error. Please try again."
             }
         }, ContextCompat.getMainExecutor(this))
@@ -252,7 +268,6 @@ class MainActivity : ComponentActivity() {
         if (!calibrationActive || !EyeNavState.faceDetected) return
         if (preview.width <= 0 || preview.height <= 0) return
 
-        // Only accept a sample when MediaPipe has actually produced a new iris result.
         val version = EyeNavState.sampleVersion
         if (version == lastCalibrationSampleVersion) return
         lastCalibrationSampleVersion = version
@@ -347,6 +362,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         stopCalibrationCamera()
+        mainHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
 
