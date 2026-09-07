@@ -34,6 +34,7 @@ import java.util.concurrent.Executors
 class MainActivity : ComponentActivity() {
 
     private lateinit var preview: PreviewView
+    private lateinit var cameraFrame: FrameLayout
     private lateinit var targetView: View
     private lateinit var status: TextView
     private lateinit var startButton: Button
@@ -53,10 +54,11 @@ class MainActivity : ComponentActivity() {
     private var gazeSumY = 0f
     private var lastCalibrationSampleVersion = -1L
     private var calibrationStartPending = false
+    private var destroying = false
 
     private val calibrationTicker = object : Runnable {
         override fun run() {
-            if (calibrationActive) {
+            if (calibrationActive && !destroying) {
                 processCalibrationFrame()
                 mainHandler.postDelayed(this, 40L)
             }
@@ -77,6 +79,7 @@ class MainActivity : ComponentActivity() {
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             if (!CalibrationManager.isCalibrated) startCalibrationCamera()
+            else showReadyScreen()
         } else {
             cameraPermission.launch(Manifest.permission.CAMERA)
         }
@@ -103,7 +106,9 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER
         }, LinearLayout.LayoutParams(-1, 38))
 
-        val cameraFrame = FrameLayout(this)
+        cameraFrame = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(18, 18, 24))
+        }
         preview = PreviewView(this)
         cameraFrame.addView(preview, FrameLayout.LayoutParams(-1, -1))
 
@@ -145,12 +150,7 @@ class MainActivity : ComponentActivity() {
         startButton = button("Start EyeNav") { startEyeNav() }
         root.addView(startButton)
 
-        root.addView(button("Recalibrate") {
-            // Never let MainActivity and the foreground tracking service own the camera together.
-            // That race was the cause of the black/frozen preview during recalibration.
-            stopTrackingServiceForCalibration()
-        })
-
+        root.addView(button("Recalibrate") { startRecalibrationSafely() })
         setContentView(root)
     }
 
@@ -161,59 +161,59 @@ class MainActivity : ComponentActivity() {
         setOnClickListener { action() }
     }
 
-    private fun stopTrackingServiceForCalibration() {
-        if (calibrationStartPending) return
+    private fun showReadyScreen() {
+        calibrationActive = false
+        targetView.visibility = View.INVISIBLE
+        preview.visibility = View.INVISIBLE
+        cameraFrame.setBackgroundColor(Color.rgb(18, 18, 24))
+        status.text = "Calibration saved. Ready to start EyeNav."
+    }
+
+    private fun startRecalibrationSafely() {
+        if (calibrationStartPending || destroying) return
         calibrationStartPending = true
         calibrationActive = false
         mainHandler.removeCallbacks(calibrationTicker)
-
         stopService(Intent(this, EyeNavTrackingService::class.java))
-        stopCalibrationCamera()
+        releaseCameraForRecalibration()
 
-        // Give CameraX/MediaPipe a moment to release the old camera before opening it again.
         mainHandler.postDelayed({
+            if (destroying) return@postDelayed
             calibrationStartPending = false
             CalibrationManager.reset(this)
             beginCalibration()
-        }, 350L)
+        }, 500L)
     }
 
     private fun beginCalibration() {
+        if (destroying) return
         calibrationActive = true
         calibrationSamples = 0
         gazeSumX = 0f
         gazeSumY = 0f
         lastCalibrationSampleVersion = EyeNavState.sampleVersion
         targetView.visibility = View.VISIBLE
+        preview.visibility = View.VISIBLE
         status.text = "Calibration starting..."
-
-        if (cameraProvider != null && ::eyeTracker.isInitialized) {
-            mainHandler.removeCallbacks(calibrationTicker)
-            mainHandler.post(calibrationTicker)
-            return
-        }
-
         startCalibrationCamera()
     }
 
     private fun startCalibrationCamera() {
+        if (destroying) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             cameraPermission.launch(Manifest.permission.CAMERA)
             return
         }
 
-        if (cameraProvider != null && ::eyeTracker.isInitialized) {
+        if (cameraProvider != null && analysis != null) {
             mainHandler.removeCallbacks(calibrationTicker)
             mainHandler.post(calibrationTicker)
             return
         }
 
         calibrationActive = true
-        calibrationSamples = 0
-        gazeSumX = 0f
-        gazeSumY = 0f
-        lastCalibrationSampleVersion = EyeNavState.sampleVersion
         targetView.visibility = View.VISIBLE
+        preview.visibility = View.VISIBLE
         status.text = "Calibration starting..."
 
         eyeTracker = EyeTracker(this)
@@ -222,6 +222,7 @@ class MainActivity : ComponentActivity() {
 
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
+            if (destroying) return@addListener
             try {
                 val provider = future.get()
                 cameraProvider = provider
@@ -237,11 +238,14 @@ class MainActivity : ComponentActivity() {
                     .build()
 
                 analysis = imageAnalysis
-                imageAnalysis.setAnalyzer(cameraExecutor!!, ImageAnalysis.Analyzer { image ->
+                val executor = cameraExecutor ?: return@addListener
+                imageAnalysis.setAnalyzer(executor, ImageAnalysis.Analyzer { image ->
                     try {
-                        val bitmap = image.toBitmap()
-                        val mpImage = com.google.mediapipe.framework.image.BitmapImageBuilder(bitmap).build()
-                        eyeTracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
+                        if (!destroying && ::eyeTracker.isInitialized) {
+                            val bitmap = image.toBitmap()
+                            val mpImage = com.google.mediapipe.framework.image.BitmapImageBuilder(bitmap).build()
+                            eyeTracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
+                        }
                     } catch (_: Exception) {
                     } finally {
                         image.close()
@@ -259,13 +263,13 @@ class MainActivity : ComponentActivity() {
                 mainHandler.removeCallbacks(calibrationTicker)
                 mainHandler.post(calibrationTicker)
             } catch (_: Exception) {
-                status.text = "Camera error. Please try again."
+                if (!destroying) status.text = "Camera error. Tap Recalibrate to retry."
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun processCalibrationFrame() {
-        if (!calibrationActive || !EyeNavState.faceDetected) return
+        if (!calibrationActive || destroying || !EyeNavState.faceDetected) return
         if (preview.width <= 0 || preview.height <= 0) return
 
         val version = EyeNavState.sampleVersion
@@ -294,9 +298,28 @@ class MainActivity : ComponentActivity() {
                 mainHandler.removeCallbacks(calibrationTicker)
                 targetView.visibility = View.INVISIBLE
                 CalibrationManager.save(this)
-                stopCalibrationCamera()
-                status.text = "Calibration complete. Enable Accessibility + Floating Cursor, then Start EyeNav."
+                // Keep the current camera alive. Do not close MediaPipe on the UI thread at
+                // the exact moment calibration finishes; that caused the freeze/black screen.
+                showReadyScreen()
                 refreshPermissionUi()
+            }
+        }
+    }
+
+    private fun releaseCameraForRecalibration() {
+        analysis?.clearAnalyzer()
+        analysis = null
+        cameraProvider?.unbindAll()
+        cameraProvider = null
+
+        val oldExecutor = cameraExecutor
+        cameraExecutor = null
+        oldExecutor?.shutdownNow()
+
+        if (::eyeTracker.isInitialized) {
+            val tracker = eyeTracker
+            Executors.newSingleThreadExecutor().execute {
+                runCatching { tracker.close() }
             }
         }
     }
@@ -308,9 +331,17 @@ class MainActivity : ComponentActivity() {
         analysis = null
         cameraProvider?.unbindAll()
         cameraProvider = null
-        cameraExecutor?.shutdownNow()
+
+        val oldExecutor = cameraExecutor
         cameraExecutor = null
-        if (::eyeTracker.isInitialized) eyeTracker.close()
+        oldExecutor?.shutdownNow()
+
+        if (::eyeTracker.isInitialized) {
+            val tracker = eyeTracker
+            Executors.newSingleThreadExecutor().execute {
+                runCatching { tracker.close() }
+            }
+        }
     }
 
     private fun startEyeNav() {
@@ -349,10 +380,7 @@ class MainActivity : ComponentActivity() {
         val overlayGranted = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
         overlayButton.text = if (overlayGranted) "Floating Cursor: ALLOWED" else "Allow Floating Cursor"
         startButton.isEnabled = CalibrationManager.isCalibrated
-        if (CalibrationManager.isCalibrated && !calibrationActive) {
-            targetView.visibility = View.INVISIBLE
-            status.text = "Calibration saved. Ready for EyeNav."
-        }
+        if (CalibrationManager.isCalibrated && !calibrationActive) showReadyScreen()
     }
 
     override fun onResume() {
@@ -361,8 +389,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        stopCalibrationCamera()
+        destroying = true
         mainHandler.removeCallbacksAndMessages(null)
+        stopCalibrationCamera()
         super.onDestroy()
     }
 
