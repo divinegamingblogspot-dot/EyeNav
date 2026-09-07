@@ -191,6 +191,8 @@ class MainActivity : ComponentActivity() {
 
     private fun beginCalibration() {
         if (destroying) return
+        // Never carry a previous session's face/iris result into a new calibration.
+        EyeNavState.reset()
         calibrationActive = true
         calibrationSamples = 0
         gazeSumX = 0f
@@ -383,6 +385,9 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        // Clear the final calibration sample before the live service is created. The service
+        // also resets defensively, so a cursor can never begin at a stale calibration target.
+        EyeNavState.reset()
         stopCameraAsync()
         ContextCompat.startForegroundService(this, Intent(this, EyeNavTrackingService::class.java))
         Toast.makeText(this, "EyeNav started. Leave this app and use the red cursor.", Toast.LENGTH_LONG).show()
