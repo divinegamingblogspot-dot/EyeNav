@@ -5,14 +5,22 @@ import com.google.mediapipe.framework.image.MPImage
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import java.util.concurrent.atomic.AtomicBoolean
 
 class EyeTracker(
     private val context: Context
 ) {
 
     private var faceLandmarker: FaceLandmarker? = null
+    private val closed = AtomicBoolean(false)
+    private var lastTimestampMs = 0L
 
+    @Synchronized
     fun setup() {
+        close()
+        closed.set(false)
+        lastTimestampMs = 0L
+
         val baseOptions = BaseOptions.builder()
             .setModelAssetPath("face_landmarker.task")
             .build()
@@ -27,6 +35,8 @@ class EyeTracker(
             .setOutputFaceBlendshapes(false)
             .setOutputFacialTransformationMatrixes(false)
             .setResultListener { result, _ ->
+                if (closed.get()) return@setResultListener
+
                 val faces = result.faceLandmarks()
                 if (faces.isEmpty()) {
                     EyeNavState.update(false, 0)
@@ -37,8 +47,6 @@ class EyeTracker(
                 EyeNavState.update(true, landmarks.size)
 
                 if (landmarks.size >= 478) {
-                    // Use iris position relative to each eye's own corners/lids.
-                    // This removes most head-position/face-size movement from the gaze signal.
                     val leftIrisX = averageX(landmarks, intArrayOf(474, 475, 476, 477))
                     val leftIrisY = averageY(landmarks, intArrayOf(474, 475, 476, 477))
                     val rightIrisX = averageX(landmarks, intArrayOf(469, 470, 471, 472))
@@ -53,7 +61,7 @@ class EyeTracker(
                 }
             }
             .setErrorListener { error ->
-                EyeNavState.setError(error.message ?: "MediaPipe error")
+                if (!closed.get()) EyeNavState.setError(error.message ?: "MediaPipe error")
             }
             .build()
 
@@ -61,10 +69,10 @@ class EyeTracker(
     }
 
     private fun averageX(landmarks: List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>, indices: IntArray): Float =
-        indices.map { landmarks[it].x() }.average().toFloat()
+        indices.sumOf { landmarks[it].x().toDouble() }.toFloat() / indices.size
 
     private fun averageY(landmarks: List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>, indices: IntArray): Float =
-        indices.map { landmarks[it].y() }.average().toFloat()
+        indices.sumOf { landmarks[it].y().toDouble() }.toFloat() / indices.size
 
     private fun normalizeBetween(value: Float, a: Float, b: Float): Float {
         val denominator = b - a
@@ -72,11 +80,21 @@ class EyeTracker(
         return ((value - a) / denominator).coerceIn(0f, 1f)
     }
 
+    @Synchronized
     fun processFrame(image: MPImage, timestampMs: Long) {
-        faceLandmarker?.detectAsync(image, timestampMs)
+        if (closed.get()) return
+        val safeTimestamp = maxOf(timestampMs, lastTimestampMs + 1L)
+        lastTimestampMs = safeTimestamp
+        try {
+            faceLandmarker?.detectAsync(image, safeTimestamp)
+        } catch (e: Exception) {
+            if (!closed.get()) EyeNavState.setError(e.message ?: "Face tracking error")
+        }
     }
 
+    @Synchronized
     fun close() {
+        closed.set(true)
         faceLandmarker?.close()
         faceLandmarker = null
     }
