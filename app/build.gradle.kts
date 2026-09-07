@@ -6,22 +6,17 @@ plugins {
 android {
     namespace = "com.prince.eyenav"
     compileSdk = 36
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
+    kotlinOptions { jvmTarget = "17" }
     defaultConfig {
         applicationId = "com.prince.eyenav"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "3.0"
+        versionCode = 4
+        versionName = "4.0"
     }
 }
 
