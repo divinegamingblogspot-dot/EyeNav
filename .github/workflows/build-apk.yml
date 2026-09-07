@@ -9,7 +9,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,27 +24,45 @@ jobs:
         with:
           gradle-version: "8.13"
 
+      - name: Restore persistent signing key
+        id: key-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/eyenav-release.jks
+          key: eyenav-signing-key-v1
+
+      - name: Create signing key on first build
+        if: steps.key-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP"
+          keytool -genkeypair \
+            -keystore "$RUNNER_TEMP/eyenav-release.jks" \
+            -storepass eyenav2026 \
+            -keypass eyenav2026 \
+            -alias eyenav \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 36500 \
+            -dname "CN=EyeNav,O=EyeNav,C=IN" \
+            -noprompt
+
       - name: Build APK
         run: gradle assembleDebug
 
-      - name: Sign APK with persistent EyeNav key
+      - name: Sign APK
         shell: bash
-        env:
-          EYENAV_KEYSTORE_B64: REPLACE_WITH_PERSISTENT_KEY
         run: |
           set -euo pipefail
-
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
           BUILD_TOOLS="$(find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           APK="app/build/outputs/apk/debug/app-debug.apk"
           KEYSTORE="$RUNNER_TEMP/eyenav-release.jks"
           ALIGNED="$RUNNER_TEMP/app-debug-aligned.apk"
-
-          printf '%s' "$EYENAV_KEYSTORE_B64" | base64 --decode > "$KEYSTORE"
-
+          test -f "$KEYSTORE"
           "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" "$ALIGNED"
           mv "$ALIGNED" "$APK"
-
           "$BUILD_TOOLS/apksigner" sign \
             --ks "$KEYSTORE" \
             --ks-pass pass:eyenav2026 \
@@ -53,10 +70,7 @@ jobs:
             --alias eyenav \
             --out "$APK" \
             "$APK"
-
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
-          echo "Signed APK: $APK"
-          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
