@@ -44,7 +44,8 @@ class EyeNavTrackingService : LifecycleService() {
     private var lastClick = 0L
     private var clickArmed = true
 
-    private val smoothing = 0.18f
+    // Faster response than the previous over-smoothed cursor while retaining stability.
+    private val smoothing = 0.38f
     private val dwellDuration = 1400L
     private val dwellTolerance = 20f
     private val clickCooldown = 1200L
@@ -54,7 +55,7 @@ class EyeNavTrackingService : LifecycleService() {
         override fun run() {
             if (!stopping) {
                 updateCursorAndDwell()
-                handler.postDelayed(this, 33L)
+                handler.postDelayed(this, 16L)
             }
         }
     }
@@ -63,10 +64,6 @@ class EyeNavTrackingService : LifecycleService() {
         super.onCreate()
         stopping = false
         cameraStarted = false
-
-        // Calibration leaves the last valid gaze sample in memory. Never let the live cursor
-        // start from that stale point (often the last calibration target, including the bottom
-        // edge). Live tracking must begin from "no face" until a fresh camera frame arrives.
         EyeNavState.reset()
 
         createNotificationChannel()
@@ -82,8 +79,6 @@ class EyeNavTrackingService : LifecycleService() {
         cursor.show()
         handler.post(ticker)
 
-        // Model creation is deliberately off the main thread. Camera binding starts only
-        // after MediaPipe is ready, so there is no half-initialized analyzer.
         executor.execute {
             try {
                 tracker.setup()
@@ -119,7 +114,7 @@ class EyeNavTrackingService : LifecycleService() {
                             val bitmap = image.toBitmap()
                             val mpImage = BitmapImageBuilder(bitmap).build()
                             try {
-                                tracker.processFrame(mpImage)
+                                tracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
                             } finally {
                                 mpImage.close()
                             }
@@ -144,7 +139,6 @@ class EyeNavTrackingService : LifecycleService() {
     }
 
     private fun updateCursorAndDwell() {
-        // Do not move the cursor until this service has received a fresh face/iris result.
         if (!EyeNavState.faceDetected) {
             dwellStart = 0L
             initialized = false
@@ -239,9 +233,6 @@ class EyeNavTrackingService : LifecycleService() {
             stopSelf()
             return START_NOT_STICKY
         }
-
-        // EyeNav is explicitly started by the user. Do not resurrect an old camera service
-        // after Android kills the process; a fresh user start creates a clean pipeline.
         return START_NOT_STICKY
     }
 
@@ -266,8 +257,6 @@ class EyeNavTrackingService : LifecycleService() {
         val cursor = overlay
         overlay = null
 
-        // Do not call MediaPipe.close() on the service main thread. The analyzer executor
-        // owns the tracker, so closing it after queued frames finish avoids shutdown freezes.
         if (executor != null) {
             runCatching {
                 executor.execute {
