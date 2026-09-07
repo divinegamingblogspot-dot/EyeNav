@@ -32,8 +32,7 @@ class EyeNavOverlay(private val context: Context) {
             dp(34),
             overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -48,8 +47,11 @@ class EyeNavOverlay(private val context: Context) {
     fun moveTo(x: Float, y: Float) {
         val view = cursor ?: return
         val params = view.layoutParams as WindowManager.LayoutParams
-        params.x = x.toInt() - view.layoutParams.width / 2
-        params.y = y.toInt() - view.layoutParams.height / 2
+        val dm = context.resources.displayMetrics
+        val maxX = (dm.widthPixels - view.width).coerceAtLeast(0)
+        val maxY = (dm.heightPixels - view.height).coerceAtLeast(0)
+        params.x = (x - view.width / 2f).toInt().coerceIn(0, maxX)
+        params.y = (y - view.height / 2f).toInt().coerceIn(0, maxY)
         try {
             windowManager.updateViewLayout(view, params)
         } catch (_: Exception) {
