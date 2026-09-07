@@ -27,12 +27,13 @@ class EyeNavTrackingService : LifecycleService() {
         private const val NOTIFICATION_ID = 1001
     }
 
-    private lateinit var eyeTracker: EyeTracker
-    private lateinit var overlay: EyeNavOverlay
+    private var eyeTracker: EyeTracker? = null
+    private var overlay: EyeNavOverlay? = null
     private val handler = Handler(Looper.getMainLooper())
     private var cameraProvider: ProcessCameraProvider? = null
     private var analysis: ImageAnalysis? = null
     private var cameraExecutor: ExecutorService? = null
+    private var stopping = false
 
     private var smoothedX = 0f
     private var smoothedY = 0f
@@ -51,8 +52,10 @@ class EyeNavTrackingService : LifecycleService() {
 
     private val ticker = object : Runnable {
         override fun run() {
-            updateCursorAndDwell()
-            handler.postDelayed(this, 33L)
+            if (!stopping) {
+                updateCursorAndDwell()
+                handler.postDelayed(this, 33L)
+            }
         }
     }
 
@@ -62,21 +65,36 @@ class EyeNavTrackingService : LifecycleService() {
         startForeground(NOTIFICATION_ID, notification())
 
         CalibrationManager.load(this)
-        eyeTracker = EyeTracker(this)
-        eyeTracker.setup()
-        overlay = EyeNavOverlay(this)
-        overlay.show()
+        val executor = Executors.newSingleThreadExecutor()
+        cameraExecutor = executor
+        val tracker = EyeTracker(this)
+        eyeTracker = tracker
+        val cursor = EyeNavOverlay(this)
+        overlay = cursor
+        cursor.show()
         handler.post(ticker)
-        startCamera()
+
+        // Model creation is deliberately off the main thread. Camera binding starts only
+        // after MediaPipe is ready, so there is no half-initialized analyzer.
+        executor.execute {
+            try {
+                tracker.setup()
+            } catch (_: Exception) {
+                if (!stopping) handler.post { stopSelf() }
+                return@execute
+            }
+            if (!stopping) handler.post { startCamera(tracker, executor) }
+        }
     }
 
-    private fun startCamera() {
+    private fun startCamera(tracker: EyeTracker, executor: ExecutorService) {
+        if (stopping) return
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             try {
+                if (stopping) return@addListener
                 val provider = future.get()
                 cameraProvider = provider
-                cameraExecutor = Executors.newSingleThreadExecutor()
 
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setTargetResolution(Size(640, 480))
@@ -85,11 +103,17 @@ class EyeNavTrackingService : LifecycleService() {
                     .build()
 
                 analysis = imageAnalysis
-                imageAnalysis.setAnalyzer(cameraExecutor!!, ImageAnalysis.Analyzer { image ->
+                imageAnalysis.setAnalyzer(executor, ImageAnalysis.Analyzer { image ->
                     try {
-                        val bitmap = image.toBitmap()
-                        val mpImage = BitmapImageBuilder(bitmap).build()
-                        eyeTracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
+                        if (!stopping) {
+                            val bitmap = image.toBitmap()
+                            val mpImage = BitmapImageBuilder(bitmap).build()
+                            try {
+                                tracker.processFrame(mpImage)
+                            } finally {
+                                mpImage.close()
+                            }
+                        }
                     } catch (_: Exception) {
                     } finally {
                         image.close()
@@ -103,6 +127,7 @@ class EyeNavTrackingService : LifecycleService() {
                     imageAnalysis
                 )
             } catch (_: Exception) {
+                if (!stopping) stopSelf()
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -135,7 +160,7 @@ class EyeNavTrackingService : LifecycleService() {
             smoothedY += (targetY - smoothedY) * smoothing
         }
 
-        overlay.moveTo(smoothedX, smoothedY)
+        overlay?.moveTo(smoothedX, smoothedY)
         processDwell(smoothedX, smoothedY)
     }
 
@@ -203,15 +228,37 @@ class EyeNavTrackingService : LifecycleService() {
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(ticker)
-        analysis?.clearAnalyzer()
+        stopping = true
+        handler.removeCallbacksAndMessages(null)
+
+        val oldAnalysis = analysis
         analysis = null
-        cameraProvider?.unbindAll()
+        runCatching { oldAnalysis?.clearAnalyzer() }
+
+        val provider = cameraProvider
         cameraProvider = null
-        cameraExecutor?.shutdownNow()
+        runCatching { provider?.unbindAll() }
+
+        val executor = cameraExecutor
         cameraExecutor = null
-        if (::eyeTracker.isInitialized) eyeTracker.close()
-        if (::overlay.isInitialized) overlay.remove()
+        val tracker = eyeTracker
+        eyeTracker = null
+        val cursor = overlay
+        overlay = null
+
+        // Do not call MediaPipe.close() on the service main thread. The analyzer executor
+        // owns the tracker, so closing it after queued frames finish avoids shutdown freezes.
+        if (executor != null) {
+            runCatching {
+                executor.execute {
+                    runCatching { tracker?.close() }
+                    executor.shutdown()
+                }
+            }
+        } else {
+            tracker?.close()
+        }
+        cursor?.remove()
         super.onDestroy()
     }
 }
