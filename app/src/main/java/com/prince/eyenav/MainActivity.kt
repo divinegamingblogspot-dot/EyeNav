@@ -40,6 +40,8 @@ class MainActivity : ComponentActivity() {
     private var calibrationSamples = 0
     private val requiredSamples = 55
     private var calibrationActive = false
+    private var gazeSumX = 0f
+    private var gazeSumY = 0f
 
     private val cameraPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -126,6 +128,8 @@ class MainActivity : ComponentActivity() {
         root.addView(button("Recalibrate") {
             CalibrationManager.reset(this)
             calibrationSamples = 0
+            gazeSumX = 0f
+            gazeSumY = 0f
             startCalibrationCamera()
         })
 
@@ -147,6 +151,8 @@ class MainActivity : ComponentActivity() {
 
         calibrationActive = true
         calibrationSamples = 0
+        gazeSumX = 0f
+        gazeSumY = 0f
         targetView.visibility = View.VISIBLE
         status.text = "Calibration starting..."
 
@@ -195,11 +201,18 @@ class MainActivity : ComponentActivity() {
         targetView.x = target.first * preview.width - targetView.width / 2f
         targetView.y = target.second * preview.height - targetView.height / 2f
         status.text = "Calibration ${CalibrationManager.currentTarget + 1}/9 — keep your head still and look at the red dot"
+
+        gazeSumX += EyeNavState.gazeX
+        gazeSumY += EyeNavState.gazeY
         calibrationSamples++
 
         if (calibrationSamples >= requiredSamples) {
-            CalibrationManager.addPoint(EyeNavState.gazeX, EyeNavState.gazeY)
+            val averageX = gazeSumX / calibrationSamples
+            val averageY = gazeSumY / calibrationSamples
+            CalibrationManager.addPoint(averageX, averageY)
             calibrationSamples = 0
+            gazeSumX = 0f
+            gazeSumY = 0f
 
             if (CalibrationManager.isCalibrated) {
                 calibrationActive = false
