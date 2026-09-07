@@ -31,8 +31,9 @@ class EyeNavTrackingService : LifecycleService() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var analysis: ImageAnalysis? = null
     private var cameraExecutor: ExecutorService? = null
-    private var stopping = false
-    private var started = false
+
+    @Volatile private var stopping = false
+    @Volatile private var started = false
 
     private var smoothedX = 0f
     private var smoothedY = 0f
@@ -61,16 +62,16 @@ class EyeNavTrackingService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         stopping = false
+        started = false
         EyeNavState.reset()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification())
         CalibrationManager.load(this)
 
         overlay = EyeNavOverlay(this)
-        overlay.show()
-        handler.post(ticker)
 
-        // FaceLandmarker creation is expensive. Never do it on Android's main thread.
+        // MediaPipe model creation stays off the main thread. The state flag is volatile
+        // because CameraX's callback runs on a different thread.
         val executor = Executors.newSingleThreadExecutor()
         cameraExecutor = executor
         executor.execute {
@@ -78,6 +79,7 @@ class EyeNavTrackingService : LifecycleService() {
                 if (stopping) return@execute
                 eyeTracker = EyeTracker(this)
                 eyeTracker.setup()
+                if (stopping) return@execute
                 started = true
                 startCamera()
             } catch (t: Throwable) {
@@ -89,21 +91,25 @@ class EyeNavTrackingService : LifecycleService() {
 
     private fun startCamera() {
         val executor = cameraExecutor ?: return
+        if (stopping || !started) return
+
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             try {
                 if (stopping || !started) return@addListener
                 val provider = future.get()
                 cameraProvider = provider
+
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setTargetResolution(Size(640, 480))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build()
+
                 analysis = imageAnalysis
                 imageAnalysis.setAnalyzer(executor, ImageAnalysis.Analyzer { image ->
                     try {
-                        if (!stopping && started) {
+                        if (!stopping && started && ::eyeTracker.isInitialized) {
                             val bitmap = image.toBitmap()
                             val mpImage = BitmapImageBuilder(bitmap).build()
                             try {
@@ -118,8 +124,16 @@ class EyeNavTrackingService : LifecycleService() {
                         image.close()
                     }
                 })
+
                 provider.unbindAll()
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, imageAnalysis)
+
+                // Do not expose a cursor at (0,0) until CameraX has actually been bound.
+                if (!stopping) {
+                    overlay.show()
+                    handler.removeCallbacks(ticker)
+                    handler.post(ticker)
+                }
             } catch (t: Throwable) {
                 EyeNavState.setError(t.message ?: "Camera error")
                 if (!stopping) handler.post { stopSelf() }
@@ -130,8 +144,10 @@ class EyeNavTrackingService : LifecycleService() {
     private fun updateCursorAndDwell() {
         if (!EyeNavState.faceDetected) {
             dwellStart = 0L
+            initialized = false
             return
         }
+
         val display = resources.displayMetrics
         val position = CalibrationManager.screenPosition(
             EyeNavState.gazeX,
@@ -141,6 +157,7 @@ class EyeNavTrackingService : LifecycleService() {
         )
         val targetX = position.first.coerceIn(0f, display.widthPixels.toFloat())
         val targetY = position.second.coerceIn(0f, display.heightPixels.toFloat())
+
         if (!initialized) {
             smoothedX = targetX
             smoothedY = targetY
@@ -150,6 +167,7 @@ class EyeNavTrackingService : LifecycleService() {
             smoothedX += (targetX - smoothedX) * smoothing
             smoothedY += (targetY - smoothedY) * smoothing
         }
+
         overlay.moveTo(smoothedX, smoothedY)
         processDwell(smoothedX, smoothedY)
     }
@@ -191,9 +209,9 @@ class EyeNavTrackingService : LifecycleService() {
 
     private fun createNotificationChannel() {
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(
-            CHANNEL_ID, "EyeNav eye tracking", NotificationManager.IMPORTANCE_LOW
-        ))
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "EyeNav eye tracking", NotificationManager.IMPORTANCE_LOW)
+        )
     }
 
     private fun notification(): Notification = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -216,23 +234,29 @@ class EyeNavTrackingService : LifecycleService() {
         started = false
         handler.removeCallbacksAndMessages(null)
         EyeNavState.reset()
+
         val oldAnalysis = analysis
         analysis = null
         runCatching { oldAnalysis?.clearAnalyzer() }
+
         val provider = cameraProvider
         cameraProvider = null
         runCatching { provider?.unbindAll() }
+
         val executor = cameraExecutor
         cameraExecutor = null
         if (executor != null) {
-            executor.execute {
-                runCatching { if (::eyeTracker.isInitialized) eyeTracker.close() }
-                executor.shutdown()
+            runCatching {
+                executor.execute {
+                    runCatching { if (::eyeTracker.isInitialized) eyeTracker.close() }
+                    executor.shutdown()
+                }
             }
         } else if (::eyeTracker.isInitialized) {
             runCatching { eyeTracker.close() }
         }
-        runCatching { overlay.remove() }
+
+        if (::overlay.isInitialized) runCatching { overlay.remove() }
         super.onDestroy()
     }
 }
