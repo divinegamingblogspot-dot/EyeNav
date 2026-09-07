@@ -9,7 +9,10 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
+import android.util.Size
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -25,6 +28,8 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
 
@@ -37,11 +42,25 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var eyeTracker: EyeTracker
     private var cameraProvider: ProcessCameraProvider? = null
+    private var analysis: ImageAnalysis? = null
+    private var cameraExecutor: ExecutorService? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var calibrationSamples = 0
-    private val requiredSamples = 55
+    private val requiredSamples = 25
     private var calibrationActive = false
     private var gazeSumX = 0f
     private var gazeSumY = 0f
+    private var lastCalibrationSampleVersion = -1L
+
+    private val calibrationTicker = object : Runnable {
+        override fun run() {
+            if (calibrationActive) {
+                processCalibrationFrame()
+                mainHandler.postDelayed(this, 40L)
+            }
+        }
+    }
 
     private val cameraPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -127,10 +146,7 @@ class MainActivity : ComponentActivity() {
 
         root.addView(button("Recalibrate") {
             CalibrationManager.reset(this)
-            calibrationSamples = 0
-            gazeSumX = 0f
-            gazeSumY = 0f
-            startCalibrationCamera()
+            beginCalibration()
         })
 
         setContentView(root)
@@ -143,9 +159,35 @@ class MainActivity : ComponentActivity() {
         setOnClickListener { action() }
     }
 
+    private fun beginCalibration() {
+        calibrationActive = true
+        calibrationSamples = 0
+        gazeSumX = 0f
+        gazeSumY = 0f
+        lastCalibrationSampleVersion = EyeNavState.sampleVersion
+        targetView.visibility = View.VISIBLE
+        status.text = "Calibration starting..."
+
+        // IMPORTANT: if the camera is already running, do not unbind/rebind it.
+        // Rebinding while MediaPipe is processing a live frame was causing black/frozen previews.
+        if (cameraProvider != null && ::eyeTracker.isInitialized) {
+            mainHandler.removeCallbacks(calibrationTicker)
+            mainHandler.post(calibrationTicker)
+            return
+        }
+
+        startCalibrationCamera()
+    }
+
     private fun startCalibrationCamera() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             cameraPermission.launch(Manifest.permission.CAMERA)
+            return
+        }
+
+        if (cameraProvider != null && ::eyeTracker.isInitialized) {
+            mainHandler.removeCallbacks(calibrationTicker)
+            mainHandler.post(calibrationTicker)
             return
         }
 
@@ -153,49 +195,67 @@ class MainActivity : ComponentActivity() {
         calibrationSamples = 0
         gazeSumX = 0f
         gazeSumY = 0f
+        lastCalibrationSampleVersion = EyeNavState.sampleVersion
         targetView.visibility = View.VISIBLE
         status.text = "Calibration starting..."
 
-        if (!::eyeTracker.isInitialized) {
-            eyeTracker = EyeTracker(this)
-            eyeTracker.setup()
-        }
+        eyeTracker = EyeTracker(this)
+        eyeTracker.setup()
+        cameraExecutor = Executors.newSingleThreadExecutor()
 
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
-            cameraProvider = future.get()
+            try {
+                val provider = future.get()
+                cameraProvider = provider
 
-            val previewUseCase = Preview.Builder().build().also {
-                it.setSurfaceProvider(preview.surfaceProvider)
-            }
-
-            val analysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .build()
-
-            analysis.setAnalyzer(ContextCompat.getMainExecutor(this)) { image ->
-                try {
-                    val bitmap = image.toBitmap()
-                    eyeTracker.processFrame(
-                        com.google.mediapipe.framework.image.BitmapImageBuilder(bitmap).build(),
-                        System.currentTimeMillis()
-                    )
-                    processCalibrationFrame()
-                } catch (_: Exception) {
-                } finally {
-                    image.close()
+                val previewUseCase = Preview.Builder().build().also {
+                    it.setSurfaceProvider(preview.surfaceProvider)
                 }
-            }
 
-            cameraProvider?.unbindAll()
-            cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, previewUseCase, analysis)
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setTargetResolution(Size(640, 480))
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                    .build()
+
+                analysis = imageAnalysis
+                imageAnalysis.setAnalyzer(cameraExecutor!!, ImageAnalysis.Analyzer { image ->
+                    try {
+                        val bitmap = image.toBitmap()
+                        val mpImage = com.google.mediapipe.framework.image.BitmapImageBuilder(bitmap).build()
+                        eyeTracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
+                    } catch (_: Exception) {
+                        // Keep the camera alive even if one frame is malformed.
+                    } finally {
+                        image.close()
+                    }
+                })
+
+                provider.unbindAll()
+                provider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_FRONT_CAMERA,
+                    previewUseCase,
+                    imageAnalysis
+                )
+
+                mainHandler.removeCallbacks(calibrationTicker)
+                mainHandler.post(calibrationTicker)
+            } catch (e: Exception) {
+                status.text = "Camera error. Please try again."
+            }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun processCalibrationFrame() {
         if (!calibrationActive || !EyeNavState.faceDetected) return
         if (preview.width <= 0 || preview.height <= 0) return
+
+        // Only accept a sample when MediaPipe has actually produced a new iris result.
+        val version = EyeNavState.sampleVersion
+        if (version == lastCalibrationSampleVersion) return
+        lastCalibrationSampleVersion = version
 
         val target = CalibrationManager.target()
         targetView.x = target.first * preview.width - targetView.width / 2f
@@ -207,8 +267,8 @@ class MainActivity : ComponentActivity() {
         calibrationSamples++
 
         if (calibrationSamples >= requiredSamples) {
-            val averageX = gazeSumX / calibrationSamples
-            val averageY = gazeSumY / calibrationSamples
+            val averageX = (gazeSumX / calibrationSamples).coerceIn(0.01f, 0.99f)
+            val averageY = (gazeSumY / calibrationSamples).coerceIn(0.01f, 0.99f)
             CalibrationManager.addPoint(averageX, averageY)
             calibrationSamples = 0
             gazeSumX = 0f
@@ -216,6 +276,7 @@ class MainActivity : ComponentActivity() {
 
             if (CalibrationManager.isCalibrated) {
                 calibrationActive = false
+                mainHandler.removeCallbacks(calibrationTicker)
                 targetView.visibility = View.INVISIBLE
                 CalibrationManager.save(this)
                 stopCalibrationCamera()
@@ -226,8 +287,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopCalibrationCamera() {
+        calibrationActive = false
+        mainHandler.removeCallbacks(calibrationTicker)
+        analysis?.clearAnalyzer()
+        analysis = null
         cameraProvider?.unbindAll()
         cameraProvider = null
+        cameraExecutor?.shutdownNow()
+        cameraExecutor = null
         if (::eyeTracker.isInitialized) eyeTracker.close()
     }
 
