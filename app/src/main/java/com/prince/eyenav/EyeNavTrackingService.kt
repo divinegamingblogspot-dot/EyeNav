@@ -37,11 +37,13 @@ class EyeNavTrackingService : LifecycleService() {
     private var dwellX = 0f
     private var dwellY = 0f
     private var lastClick = 0L
+    private var clickArmed = true
 
-    private val smoothing = 0.10f
-    private val dwellDuration = 800L
-    private val dwellTolerance = 28f
-    private val clickCooldown = 900L
+    private val smoothing = 0.18f
+    private val dwellDuration = 1400L
+    private val dwellTolerance = 20f
+    private val clickCooldown = 1200L
+    private val rearmDistance = 70f
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -99,7 +101,11 @@ class EyeNavTrackingService : LifecycleService() {
     }
 
     private fun updateCursorAndDwell() {
-        if (!EyeNavState.faceDetected) return
+        if (!EyeNavState.faceDetected) {
+            dwellStart = 0L
+            initialized = false
+            return
+        }
 
         val display = resources.displayMetrics
         val position = CalibrationManager.screenPosition(
@@ -116,10 +122,12 @@ class EyeNavTrackingService : LifecycleService() {
             smoothedX = targetX
             smoothedY = targetY
             initialized = true
-        } else {
-            smoothedX += (targetX - smoothedX) * smoothing
-            smoothedY += (targetY - smoothedY) * smoothing
+            dwellStart = 0L
+            return
         }
+
+        smoothedX += (targetX - smoothedX) * smoothing
+        smoothedY += (targetY - smoothedY) * smoothing
 
         overlay.moveTo(smoothedX, smoothedY)
         processDwell(smoothedX, smoothedY)
@@ -127,6 +135,17 @@ class EyeNavTrackingService : LifecycleService() {
 
     private fun processDwell(x: Float, y: Float) {
         val now = System.currentTimeMillis()
+
+        if (!clickArmed) {
+            val distanceFromClickPoint = abs(x - dwellX) + abs(y - dwellY)
+            if (distanceFromClickPoint >= rearmDistance && now - lastClick >= clickCooldown) {
+                clickArmed = true
+                dwellStart = now
+                dwellX = x
+                dwellY = y
+            }
+            return
+        }
 
         if (dwellStart == 0L) {
             dwellStart = now
@@ -146,7 +165,10 @@ class EyeNavTrackingService : LifecycleService() {
         if (now - dwellStart >= dwellDuration && now - lastClick >= clickCooldown) {
             EyeNavAccessibilityService.instance?.performEyeClick(x, y)
             lastClick = now
+            clickArmed = false
             dwellStart = 0L
+            dwellX = x
+            dwellY = y
         }
     }
 
