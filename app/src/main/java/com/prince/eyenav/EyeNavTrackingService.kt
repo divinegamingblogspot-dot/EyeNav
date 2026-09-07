@@ -26,14 +26,13 @@ class EyeNavTrackingService : LifecycleService() {
         private const val NOTIFICATION_ID = 1001
     }
 
-    private var eyeTracker: EyeTracker? = null
-    private var overlay: EyeNavOverlay? = null
+    private lateinit var eyeTracker: EyeTracker
+    private lateinit var overlay: EyeNavOverlay
     private val handler = Handler(Looper.getMainLooper())
     private var cameraProvider: ProcessCameraProvider? = null
     private var analysis: ImageAnalysis? = null
     private var cameraExecutor: ExecutorService? = null
     private var stopping = false
-    private var cameraStarted = false
 
     private var smoothedX = 0f
     private var smoothedY = 0f
@@ -44,7 +43,7 @@ class EyeNavTrackingService : LifecycleService() {
     private var lastClick = 0L
     private var clickArmed = true
 
-    // Faster response than the previous over-smoothed cursor while retaining stability.
+    // Keep the cursor responsive. The previous 0.18 smoothing made movement appear frozen.
     private val smoothing = 0.38f
     private val dwellDuration = 1400L
     private val dwellTolerance = 20f
@@ -63,41 +62,29 @@ class EyeNavTrackingService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         stopping = false
-        cameraStarted = false
         EyeNavState.reset()
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification())
 
         CalibrationManager.load(this)
-        val executor = Executors.newSingleThreadExecutor()
-        cameraExecutor = executor
-        val tracker = EyeTracker(this)
-        eyeTracker = tracker
-        val cursor = EyeNavOverlay(this)
-        overlay = cursor
-        cursor.show()
+        eyeTracker = EyeTracker(this)
+        eyeTracker.setup()
+        overlay = EyeNavOverlay(this)
+        overlay.show()
         handler.post(ticker)
-
-        executor.execute {
-            try {
-                tracker.setup()
-            } catch (_: Exception) {
-                if (!stopping) handler.post { stopSelf() }
-                return@execute
-            }
-            if (!stopping) handler.post { startCamera(tracker, executor) }
-        }
+        startCamera()
     }
 
-    private fun startCamera(tracker: EyeTracker, executor: ExecutorService) {
-        if (stopping || cameraStarted) return
-        cameraStarted = true
+    private fun startCamera() {
+        val executor = Executors.newSingleThreadExecutor()
+        cameraExecutor = executor
 
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             try {
                 if (stopping) return@addListener
+
                 val provider = future.get()
                 cameraProvider = provider
 
@@ -114,12 +101,13 @@ class EyeNavTrackingService : LifecycleService() {
                             val bitmap = image.toBitmap()
                             val mpImage = BitmapImageBuilder(bitmap).build()
                             try {
-                                tracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
+                                eyeTracker.processFrame(mpImage, System.nanoTime() / 1_000_000L)
                             } finally {
                                 mpImage.close()
                             }
                         }
                     } catch (_: Exception) {
+                        // Keep the camera/analyzer alive after an individual bad frame.
                     } finally {
                         image.close()
                     }
@@ -132,7 +120,6 @@ class EyeNavTrackingService : LifecycleService() {
                     imageAnalysis
                 )
             } catch (_: Exception) {
-                cameraStarted = false
                 if (!stopping) stopSelf()
             }
         }, ContextCompat.getMainExecutor(this))
@@ -166,7 +153,7 @@ class EyeNavTrackingService : LifecycleService() {
             smoothedY += (targetY - smoothedY) * smoothing
         }
 
-        overlay?.moveTo(smoothedX, smoothedY)
+        overlay.moveTo(smoothedX, smoothedY)
         processDwell(smoothedX, smoothedY)
     }
 
@@ -238,36 +225,19 @@ class EyeNavTrackingService : LifecycleService() {
 
     override fun onDestroy() {
         stopping = true
-        cameraStarted = false
-        handler.removeCallbacksAndMessages(null)
+        handler.removeCallbacks(ticker)
         EyeNavState.reset()
 
-        val oldAnalysis = analysis
+        analysis?.clearAnalyzer()
         analysis = null
-        runCatching { oldAnalysis?.clearAnalyzer() }
-
-        val provider = cameraProvider
+        cameraProvider?.unbindAll()
         cameraProvider = null
-        runCatching { provider?.unbindAll() }
 
-        val executor = cameraExecutor
+        cameraExecutor?.shutdownNow()
         cameraExecutor = null
-        val tracker = eyeTracker
-        eyeTracker = null
-        val cursor = overlay
-        overlay = null
 
-        if (executor != null) {
-            runCatching {
-                executor.execute {
-                    runCatching { tracker?.close() }
-                    executor.shutdown()
-                }
-            }
-        } else {
-            tracker?.close()
-        }
-        cursor?.remove()
+        if (::eyeTracker.isInitialized) eyeTracker.close()
+        if (::overlay.isInitialized) overlay.remove()
         super.onDestroy()
     }
 }
