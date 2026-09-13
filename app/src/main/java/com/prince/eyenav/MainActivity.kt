@@ -14,8 +14,6 @@ import android.speech.RecognitionListener
 import android.speech.SpeechRecognizer
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
-import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -199,7 +197,7 @@ class MainActivity : ComponentActivity() {
 
     private fun createOrb(): View {
         val frame = FrameLayout(this)
-        frame.gravity = Gravity.CENTER
+        frame.foregroundGravity = Gravity.CENTER
 
         val outer = TextView(this)
         outer.background = background(Color.rgb(4, 17, 27), 140, Color.rgb(25, 116, 143))
@@ -250,7 +248,7 @@ class MainActivity : ComponentActivity() {
             p.setMargins(dp(4), dp(2), dp(4), dp(2))
             row.addView(b, p)
         }
-        scroll.addView(row, HorizontalScrollView.LayoutParams(-2, -1))
+        scroll.addView(row, FrameLayout.LayoutParams(-2, -1))
         return scroll
     }
 
@@ -364,7 +362,12 @@ class MainActivity : ComponentActivity() {
                         transcript.text = "VOICE INPUT  ›  $it"
                     }
                 }
-                override fun onRmsChanged(rmsdB: Float) { if (rmsdB > 3) orb.scaleX = 1.02f; if (rmsdB > 3) orb.scaleY = 1.02f }
+                override fun onRmsChanged(rmsdB: Float) {
+                    if (rmsdB > 3) {
+                        orb.scaleX = 1.02f
+                        orb.scaleY = 1.02f
+                    }
+                }
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
                 override fun onEvent(eventType: Int, params: Bundle?) = Unit
             })
