@@ -49,7 +49,7 @@ class MainActivity : ComponentActivity() {
     private val green = Color.rgb(105, 255, 178)
 
     private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) listenOnce() else setStatus("MIC PERMISSION REQUIRED")
+        if (granted) startVoiceCore() else setStatus("MIC PERMISSION REQUIRED")
     }
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -65,8 +65,16 @@ class MainActivity : ComponentActivity() {
         buildUi()
         setupRecognizer()
         refreshStates()
+
         if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        // DOC becomes hands-free immediately after the one-time microphone permission is granted.
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startVoiceCore()
+        } else {
+            audioPermission.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -116,7 +124,7 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         }
-        transcript = text("Voice channel standing by • say “Doc” to wake", 11f, muted).apply { gravity = Gravity.CENTER }
+        transcript = text("Wake word active • say “Doc” or “Hey Doc”", 11f, muted).apply { gravity = Gravity.CENTER }
         state.addView(status, size(-1, -2))
         val transcriptParams = size(-1, -2)
         transcriptParams.topMargin = dp(6)
@@ -136,7 +144,7 @@ class MainActivity : ComponentActivity() {
         body.addView(telemetry, size(-1, dp(42)))
         body.addView(space(dp(10)))
 
-        voiceButton = card("ACTIVATE VOICE CORE", "Continuous hands-free listening • screen-off capable") { toggleVoiceCore() }
+        voiceButton = card("VOICE CORE ONLINE", "Wake-word listening • say Doc, then your command") { toggleVoiceCore() }
         body.addView(voiceButton, size(-1, dp(66)))
         body.addView(space(dp(8)))
 
@@ -167,7 +175,7 @@ class MainActivity : ComponentActivity() {
         body.addView(bottom, size(-1, dp(52)))
         body.addView(space(dp(10)))
 
-        body.addView(text("LOCAL COGNITIVE CORE  •  API-KEY FREE\nVOICE FIRST  •  ACCESSIBILITY POWERED\n\nLOCK SCREEN: say “Doc, open WhatsApp”. DOC wakes the display and lets Android handle normal unlock when required.", 9f, Color.rgb(58, 88, 104)).apply {
+        body.addView(text("LOCAL COGNITIVE CORE  •  API-KEY FREE\nVOICE FIRST  •  ACCESSIBILITY POWERED\n\nLOCK SCREEN: say “Doc, open WhatsApp”. DOC keeps the wake core in a microphone foreground service; Android still controls what may run while locked.", 9f, Color.rgb(58, 88, 104)).apply {
             gravity = Gravity.CENTER
             typeface = Typeface.MONOSPACE
             setPadding(dp(5), 0, dp(5), 0)
@@ -216,7 +224,7 @@ class MainActivity : ComponentActivity() {
         orb.background = background(Color.rgb(2, 11, 18), 90, cyan)
         frame.addView(orb, FrameLayout.LayoutParams(dp(108), dp(108), Gravity.CENTER))
 
-        val core = text("VOICE", 8f, Color.rgb(136, 215, 235)).apply {
+        val core = text("WAKE", 8f, Color.rgb(136, 215, 235)).apply {
             gravity = Gravity.CENTER
             typeface = Typeface.MONOSPACE
             letterSpacing = .2f
@@ -320,16 +328,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startVoiceCore() {
-        ContextCompat.startForegroundService(this, Intent(this, DocVoiceService::class.java).setAction(DocVoiceService.ACTION_START))
-        continuous = true
-        voiceButton.text = "VOICE CORE ONLINE\nContinuous listening • tap to sleep"
-        setStatus("JARVIS VOICE CORE • ACTIVE")
+        try {
+            ContextCompat.startForegroundService(this, Intent(this, DocVoiceService::class.java).setAction(DocVoiceService.ACTION_START))
+            continuous = true
+            voiceButton.text = "VOICE CORE ONLINE\nWake word active • say Doc, then command"
+            setStatus("DOC WAKE CORE • ACTIVE")
+        } catch (_: Throwable) {
+            continuous = false
+            setStatus("VOICE CORE COULD NOT START")
+        }
     }
 
     private fun stopVoiceCore() {
         stopService(Intent(this, DocVoiceService::class.java).setAction(DocVoiceService.ACTION_STOP))
         continuous = false
-        voiceButton.text = "ACTIVATE VOICE CORE\nContinuous hands-free listening • screen-off capable"
+        voiceButton.text = "ACTIVATE VOICE CORE\nWake-word listening • screen-off capable"
         setStatus("VOICE CORE STANDBY")
     }
 
@@ -348,9 +361,9 @@ class MainActivity : ComponentActivity() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) return
         recognizer = SpeechRecognizer.createSpeechRecognizer(this).also { r ->
             r.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { setStatus("LISTENING • VOICE CHANNEL OPEN") }
-                override fun onBeginningOfSpeech() { setStatus("HEARING YOU") }
-                override fun onEndOfSpeech() { setStatus("PROCESSING") }
+                override fun onReadyForSpeech(params: Bundle?) { setStatus("TALK ONCE • VOICE CHANNEL OPEN") }
+                override fun onBeginningOfSpeech() { setStatus("TALK ONCE • HEARING YOU") }
+                override fun onEndOfSpeech() { setStatus("TALK ONCE • PROCESSING") }
                 override fun onError(error: Int) { setStatus("VOICE CHANNEL READY") }
                 override fun onResults(results: Bundle?) {
                     val spoken = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
