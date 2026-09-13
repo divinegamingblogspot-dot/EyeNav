@@ -12,7 +12,6 @@ import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.SpeechRecognizer
 import android.view.Gravity
-import android.view.View
 import android.widget.Button
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -53,53 +52,42 @@ class MainActivity : ComponentActivity() {
             setPadding(24, 22, 24, 22)
             setBackgroundColor(Color.rgb(3, 7, 13))
         }
-
         root.addView(TextView(this).apply {
             text = "D O C"; textSize = 30f; letterSpacing = .28f; gravity = Gravity.CENTER
             setTextColor(Color.rgb(120, 220, 255))
         }, LinearLayout.LayoutParams(-1, 55))
         root.addView(TextView(this).apply {
-            text = "PERSONAL INTELLIGENCE SYSTEM  •  OFFLINE CORE"
-            textSize = 9f; letterSpacing = .14f; gravity = Gravity.CENTER
+            text = "PERSONAL INTELLIGENCE SYSTEM  •  OFFLINE CORE"; textSize = 9f; letterSpacing = .14f; gravity = Gravity.CENTER
             setTextColor(Color.rgb(105, 125, 145))
         }, LinearLayout.LayoutParams(-1, 30))
-
         orb = TextView(this).apply {
             text = "◉"; textSize = 76f; gravity = Gravity.CENTER
             setTextColor(Color.rgb(90, 215, 255)); background = bg(Color.rgb(6, 20, 30), 100f, 2, Color.rgb(45, 150, 190))
         }
-        val orbParams = LinearLayout.LayoutParams(190, 190); orbParams.setMargins(0, 18, 0, 16)
-        root.addView(orb, orbParams)
-
+        val orbParams = LinearLayout.LayoutParams(190, 190); orbParams.setMargins(0, 18, 0, 16); root.addView(orb, orbParams)
         status = TextView(this).apply {
-            text = "SYSTEMS NOMINAL"; textSize = 17f; gravity = Gravity.CENTER
-            setTextColor(Color.WHITE); background = bg(Color.rgb(9, 17, 27), 20f, 1, Color.rgb(35, 65, 85)); setPadding(12, 12, 12, 12)
+            text = "SYSTEMS NOMINAL"; textSize = 17f; gravity = Gravity.CENTER; setTextColor(Color.WHITE)
+            background = bg(Color.rgb(9, 17, 27), 20f, 1, Color.rgb(35, 65, 85)); setPadding(12, 12, 12, 12)
         }
         root.addView(status, LinearLayout.LayoutParams(-1, 58))
-
         transcript = TextView(this).apply {
-            text = "Awaiting command…"; textSize = 13f; gravity = Gravity.CENTER_VERTICAL
-            setTextColor(Color.rgb(160, 180, 195)); setPadding(16, 0, 16, 0)
+            text = "Awaiting command…"; textSize = 13f; gravity = Gravity.CENTER_VERTICAL; setTextColor(Color.rgb(160, 180, 195)); setPadding(16, 0, 16, 0)
         }
         root.addView(transcript, LinearLayout.LayoutParams(-1, 52))
-
         val talk = button("◉   TALK TO DOC") { requestAndListen() }
-        talk.background = bg(Color.rgb(12, 64, 84), 22f, 1, Color.rgb(75, 190, 225))
-        root.addView(talk, LinearLayout.LayoutParams(-1, 58))
-
+        talk.background = bg(Color.rgb(12, 64, 84), 22f, 1, Color.rgb(75, 190, 225)); root.addView(talk, LinearLayout.LayoutParams(-1, 58))
         val chips = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         listOf("Open WhatsApp", "Read screen", "Battery", "What time is it?", "Go home").forEach { command ->
             val b = Button(this).apply {
-                text = command; isAllCaps = false; textSize = 11f; setTextColor(Color.LTGRAY); background = bg(Color.rgb(10, 18, 27), 18f, 1, Color.rgb(30, 55, 70)); setOnClickListener { doc.execute(command) }
+                text = command; isAllCaps = false; textSize = 11f; setTextColor(Color.LTGRAY)
+                background = bg(Color.rgb(10, 18, 27), 18f, 1, Color.rgb(30, 55, 70)); setOnClickListener { doc.execute(command) }
             }
             val p = LinearLayout.LayoutParams(-2, 48); p.setMargins(4, 4, 4, 4); row.addView(b, p)
         }
         chips.addView(row); root.addView(chips, LinearLayout.LayoutParams(-1, 58))
-
         root.addView(button("♾   ALWAYS LISTEN") {
-            continuous = !continuous
-            status.text = if (continuous) "ALWAYS LISTENING • ACTIVE" else "ALWAYS LISTENING • OFF"
+            continuous = !continuous; status.text = if (continuous) "ALWAYS LISTENING • ACTIVE" else "ALWAYS LISTENING • OFF"
             if (continuous) requestAndListen()
         })
         root.addView(button("♿   ACCESSIBILITY CORE") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
@@ -114,15 +102,11 @@ class MainActivity : ComponentActivity() {
     private fun button(label: String, action: () -> Unit) = Button(this).apply {
         text = label; isAllCaps = false; textSize = 13f; setTextColor(Color.LTGRAY)
         background = bg(Color.rgb(8, 15, 23), 20f, 1, Color.rgb(28, 50, 65)); setOnClickListener { action() }
-        val p = layoutParams
-        if (p != null) p.setMargins(0, 3, 0, 3)
     }
 
     private fun pulseOrb() {
         if (!::orb.isInitialized) return
-        orb.animate().scaleX(1.05f).scaleY(1.05f).setDuration(260).withEndAction {
-            orb.animate().scaleX(1f).scaleY(1f).setDuration(360).start()
-        }.start()
+        orb.animate().scaleX(1.05f).scaleY(1.05f).setDuration(260).withEndAction { orb.animate().scaleX(1f).scaleY(1f).setDuration(360).start() }.start()
     }
 
     private fun setupRecognizer() {
@@ -148,11 +132,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestAndListen() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
-            audioPermission.launch(Manifest.permission.RECORD_AUDIO)
-        else listen()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) audioPermission.launch(Manifest.permission.RECORD_AUDIO) else listen()
     }
-
     private fun listen() { if (!isFinishing) recognizer?.startListening(doc.recognizerIntent()) }
     override fun onDestroy() { pulse.removeCallbacksAndMessages(null); recognizer?.destroy(); recognizer = null; doc.destroy(); super.onDestroy() }
 }
