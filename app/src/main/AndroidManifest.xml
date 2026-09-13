@@ -1,18 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
-        <intent>
-            <action android:name="android.speech.RecognitionService" />
-        </intent>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
     </queries>
 
     <application android:allowBackup="true" android:label="Doc" android:supportsRtl="true" android:theme="@style/Theme.EyeNav">
@@ -23,7 +19,6 @@
             </intent-filter>
         </activity>
         <service android:name=".DocVoiceService" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="microphone" />
-        <service android:name=".EyeNavTrackingService" android:exported="false" android:foregroundServiceType="camera" />
         <service android:name=".EyeNavAccessibilityService" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="true">
             <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service_config" />
