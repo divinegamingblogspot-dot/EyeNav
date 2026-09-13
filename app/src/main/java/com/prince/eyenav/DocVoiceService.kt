@@ -11,19 +11,26 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import java.util.Locale
 
-/** Persistent voice channel. Prefers on-device recognition when the phone exposes it. */
+/**
+ * DOC always-ready voice core.
+ * Keeps a microphone foreground service alive while the user has activated DOC,
+ * including while the display is off/locked. Recognition prefers on-device mode.
+ */
 class DocVoiceService : Service() {
     companion object {
         const val ACTION_START = "com.prince.eyenav.DOC_START"
         const val ACTION_STOP = "com.prince.eyenav.DOC_STOP"
         private const val CHANNEL_ID = "doc_voice_core"
         private const val NOTIFICATION_ID = 901
+        private const val WAKE_WORD = "doc"
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -31,80 +38,154 @@ class DocVoiceService : Service() {
     private var assistant: DocAssistant? = null
     private var listening = true
     private var restarting = false
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
-        createChannel(); startForegroundCompat()
+        createChannel()
+        startForegroundCompat()
+        acquireCpuLock()
         assistant = DocAssistant(this).also { a ->
             a.onStatus = { updateNotification(it) }
-            a.onListeningState = { enabled -> listening = enabled; if (enabled) scheduleListen(200) else stopRecognizer() }
+            a.onListeningState = { enabled ->
+                listening = enabled
+                if (enabled) scheduleListen(200) else stopRecognizer()
+            }
         }
         setupRecognizer()
+        scheduleListen(350)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> { stopRecognizer(); stopSelf(); return START_NOT_STICKY }
-            ACTION_START -> { listening = true; scheduleListen(100) }
+            ACTION_STOP -> {
+                stopRecognizer()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_START -> {
+                listening = true
+                acquireCpuLock()
+                setupRecognizerIfNeeded()
+                scheduleListen(100)
+            }
         }
         return START_STICKY
     }
 
+    private fun setupRecognizerIfNeeded() {
+        if (recognizer == null) setupRecognizer()
+    }
+
     private fun setupRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
-        recognizer = if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
-            SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-        } else {
-            SpeechRecognizer.createSpeechRecognizer(this)
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            updateNotification("VOICE ENGINE UNAVAILABLE")
+            return
         }
-        recognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: android.os.Bundle?) { updateNotification("VOICE CHANNEL • LISTENING") }
-            override fun onBeginningOfSpeech() { updateNotification("VOICE CHANNEL • HEARING YOU") }
-            override fun onEndOfSpeech() { updateNotification("VOICE CHANNEL • THINKING") }
-            override fun onError(error: Int) { scheduleListen(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1200 else 500) }
-            override fun onResults(results: android.os.Bundle?) {
-                val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-                if (text.isNotBlank() && listening) assistant?.execute(text)
-                scheduleListen(500)
+        try {
+            recognizer?.destroy()
+            recognizer = if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+            } else {
+                SpeechRecognizer.createSpeechRecognizer(this)
             }
-            override fun onPartialResults(partialResults: android.os.Bundle?) {
-                partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.takeIf { it.isNotBlank() }?.let { updateNotification("HEARING • $it") }
-            }
-            override fun onBufferReceived(buffer: ByteArray?) = Unit
-            override fun onEvent(eventType: Int, params: android.os.Bundle?) = Unit
-            override fun onRmsChanged(rmsdB: Float) = Unit
-        })
+            recognizer?.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: android.os.Bundle?) { updateNotification("DOC • SCREEN OFF READY • SAY DOC") }
+                override fun onBeginningOfSpeech() { updateNotification("DOC • HEARING YOU") }
+                override fun onEndOfSpeech() { updateNotification("DOC • PROCESSING") }
+                override fun onError(error: Int) {
+                    val delay = if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1200L else 350L
+                    scheduleListen(delay)
+                }
+                override fun onResults(results: android.os.Bundle?) {
+                    val heard = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+                    val command = wakeCommand(heard)
+                    if (command != null && listening) {
+                        updateNotification("DOC • EXECUTING • ${command.take(70)}")
+                        assistant?.execute(command)
+                    } else if (heard.isNotBlank()) {
+                        updateNotification("DOC • STANDBY • SAY DOC FIRST")
+                    }
+                    scheduleListen(250)
+                }
+                override fun onPartialResults(partialResults: android.os.Bundle?) {
+                    val heard = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+                    if (heard.contains(Regex("\\b(doc|doctor|hey doc|okay doc)\\b", RegexOption.IGNORE_CASE))) {
+                        updateNotification("DOC • WAKE WORD DETECTED")
+                    }
+                }
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+                override fun onEvent(eventType: Int, params: android.os.Bundle?) = Unit
+                override fun onRmsChanged(rmsdB: Float) = Unit
+            })
+        } catch (_: Throwable) {
+            recognizer = null
+            updateNotification("DOC • VOICE ENGINE RETRYING")
+            scheduleListen(1500)
+        }
+    }
+
+    /** Returns only the command after the DOC wake word. */
+    private fun wakeCommand(raw: String): String? {
+        val text = raw.trim()
+        if (text.isBlank()) return null
+        val match = Regex("^(?:hey\\s+|okay\\s+|ok\\s+)?doc\\b\\s*(.*)$", RegexOption.IGNORE_CASE).find(text)
+            ?: return null
+        val command = match.groupValues.getOrNull(1)?.trim().orEmpty()
+        return command.ifBlank { "speak Say the command." }
     }
 
     private fun scheduleListen(delay: Long) {
-        if (!listening || recognizer == null || restarting) return
+        if (!listening || restarting) return
+        if (recognizer == null) setupRecognizerIfNeeded()
+        if (recognizer == null) return
         restarting = true
         handler.postDelayed({
             restarting = false
             if (!listening) return@postDelayed
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { updateNotification("MICROPHONE PERMISSION REQUIRED"); return@postDelayed }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                updateNotification("DOC • MICROPHONE PERMISSION REQUIRED")
+                return@postDelayed
+            }
             try {
                 recognizer?.cancel()
                 recognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault())
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Doc listening")
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Say Doc followed by a command")
                 })
-            } catch (_: Throwable) { scheduleListen(1500) }
+            } catch (_: Throwable) {
+                scheduleListen(1000)
+            }
         }, delay)
     }
 
+    private fun acquireCpuLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DOC:VoiceCore").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
     private fun stopRecognizer() {
-        listening = false; handler.removeCallbacksAndMessages(null)
+        listening = false
+        handler.removeCallbacksAndMessages(null)
         try { recognizer?.cancel(); recognizer?.destroy() } catch (_: Throwable) { }
         recognizer = null
     }
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel(CHANNEL_ID, "Doc voice core", NotificationManager.IMPORTANCE_LOW).apply { description = "Persistent Doc voice control" }
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Doc voice core",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply { description = "Persistent Doc voice control" }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
@@ -119,12 +200,29 @@ class DocVoiceService : Service() {
         .build()
 
     private fun startForegroundCompat() {
-        if (Build.VERSION.SDK_INT >= 30) startForeground(NOTIFICATION_ID, notification("VOICE CHANNEL STARTING"), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        else startForeground(NOTIFICATION_ID, notification("VOICE CHANNEL STARTING"))
+        if (Build.VERSION.SDK_INT >= 30) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification("VOICE CORE STARTING • LOCK-SCREEN READY"),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification("VOICE CORE STARTING • LOCK-SCREEN READY"))
+        }
     }
 
-    private fun updateNotification(text: String) { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text)) }
+    private fun updateNotification(text: String) {
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text))
+    }
 
-    override fun onDestroy() { stopRecognizer(); assistant?.destroy(); assistant = null; super.onDestroy() }
+    override fun onDestroy() {
+        stopRecognizer()
+        assistant?.destroy()
+        assistant = null
+        try { wakeLock?.let { if (it.isHeld) it.release() } } catch (_: Throwable) { }
+        wakeLock = null
+        super.onDestroy()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 }
