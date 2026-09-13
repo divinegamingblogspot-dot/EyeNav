@@ -142,7 +142,8 @@ class LocalHotwordEngine(
             if (n <= 0) continue
             val rec = recognizer ?: continue
             if (rec.acceptWaveForm(buffer, n)) {
-                val text = extractVoskText(rec.result())
+                val resultJson: String = rec.result()
+                val text: String = extractVoskText(resultJson)
                 val wake = extractWake(text)
                 if (wake != null) {
                     main.post { onWake(wake) }
