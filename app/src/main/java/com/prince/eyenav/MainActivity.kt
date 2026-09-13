@@ -5,9 +5,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.SpeechRecognizer
@@ -21,7 +21,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 
-/** DOC // command deck. The heavy voice channel runs in DocVoiceService so commands survive app switching. */
+/** DOC // command deck. Voice Core keeps running after app switching and while the display is off. */
 class MainActivity : ComponentActivity() {
     private lateinit var doc: DocAssistant
     private var recognizer: SpeechRecognizer? = null
@@ -30,8 +30,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var orb: TextView
     private lateinit var voiceButton: Button
     private lateinit var accessibilityButton: Button
+    private lateinit var batteryButton: Button
     private var continuous = false
-    private val pulse = Handler(Looper.getMainLooper())
+    private val pulse = android.os.Handler(android.os.Looper.getMainLooper())
 
     private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) listenOnce() else status.text = "MICROPHONE ACCESS REQUIRED"
@@ -42,7 +43,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.setStatusBarColor(Color.rgb(2, 5, 10)); window.setNavigationBarColor(Color.rgb(2, 5, 10))
         doc = DocAssistant(this).also { it.onStatus = { text -> runOnUiThread { status.text = text; pulseOrb() } } }
-        buildUi(); setupRecognizer(); pulseOrb(); refreshAccessibilityState()
+        buildUi(); setupRecognizer(); pulseOrb(); refreshAccessibilityState(); refreshBatteryState()
         if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
@@ -79,6 +80,8 @@ class MainActivity : ComponentActivity() {
         body.addView(button("◌   TALK ONCE") { requestAndListenOnce() }, LinearLayout.LayoutParams(-1, 56))
         accessibilityButton = button("♿   CONNECT ACCESSIBILITY CORE") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         body.addView(accessibilityButton, LinearLayout.LayoutParams(-1, 56))
+        batteryButton = button("⚡   PROTECT VOICE CORE FROM BATTERY SLEEP") { requestBatteryExemption() }
+        body.addView(batteryButton, LinearLayout.LayoutParams(-1, 56))
 
         val chips = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -90,9 +93,9 @@ class MainActivity : ComponentActivity() {
 
         body.addView(button("🔊   TEST CINEMATIC DOC VOICE") { doc.speak("All systems online. Voice channel stable. Local intelligence core ready.") }, LinearLayout.LayoutParams(-1, 54))
         body.addView(TextView(this).apply {
-            text = "NO AI API KEY  •  NO DAILY MODEL QUOTA  •  OFFLINE COMMAND ROUTER\n\nAccessibility unlocks cross-app taps, typing, swipes, screen reading and navigation. Voice Core keeps listening through a microphone foreground service after you activate it."
+            text = "LOCK-SCREEN MODE  •  SAY: DOC, OPEN WHATSAPP\n\nVoice Core uses a microphone foreground service, CPU wake lock and brief display wake on commands. Disable battery optimization for DOC for the most reliable screen-off operation. Accessibility unlocks cross-app taps, typing, swipes and screen reading."
             textSize = 9f; gravity = Gravity.CENTER; setTextColor(Color.rgb(75, 100, 118)); setPadding(6, 18, 6, 12)
-        }, LinearLayout.LayoutParams(-1, 90))
+        }, LinearLayout.LayoutParams(-1, 110))
 
         root.addView(body); setContentView(root)
     }
@@ -113,12 +116,32 @@ class MainActivity : ComponentActivity() {
     private fun startVoiceCore() {
         val intent = Intent(this, DocVoiceService::class.java).setAction(DocVoiceService.ACTION_START)
         ContextCompat.startForegroundService(this, intent)
-        continuous = true; voiceButton.text = "◉   VOICE CORE ONLINE  //  TAP TO SLEEP"; status.text = "JARVIS VOICE CORE • ACTIVE"; pulseOrb()
+        continuous = true; voiceButton.text = "◉   VOICE CORE ONLINE  //  TAP TO SLEEP"; status.text = "JARVIS VOICE CORE • ACTIVE • LOCK-SCREEN READY"; pulseOrb()
     }
 
     private fun stopVoiceCore() {
         stopService(Intent(this, DocVoiceService::class.java).setAction(DocVoiceService.ACTION_STOP))
         continuous = false; voiceButton.text = "◉   ACTIVATE JARVIS VOICE CORE"; status.text = "VOICE CORE STANDBY"; pulseOrb()
+    }
+
+    private fun requestBatteryExemption() {
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            if (android.os.Build.VERSION.SDK_INT >= 23 && !pm.isIgnoringBatteryOptimizations(packageName)) {
+                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+            } else {
+                status.text = "BATTERY OPTIMIZATION ALREADY DISABLED FOR DOC"
+            }
+        } catch (_: Throwable) {
+            try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (_: Throwable) { status.text = "OPEN BATTERY SETTINGS MANUALLY" }
+        }
+    }
+
+    private fun refreshBatteryState() {
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            batteryButton.text = if (android.os.Build.VERSION.SDK_INT >= 23 && pm.isIgnoringBatteryOptimizations(packageName)) "⚡   BATTERY PROTECTION • DOC EXEMPT" else "⚡   PROTECT VOICE CORE FROM BATTERY SLEEP"
+        } catch (_: Throwable) { }
     }
 
     private fun setupRecognizer() {
@@ -158,7 +181,7 @@ class MainActivity : ComponentActivity() {
         accessibilityButton.text = if (enabled) "♿   ACCESSIBILITY CORE • CONNECTED" else "♿   CONNECT ACCESSIBILITY CORE"
     }
 
-    override fun onResume() { super.onResume(); refreshAccessibilityState() }
+    override fun onResume() { super.onResume(); refreshAccessibilityState(); refreshBatteryState() }
 
     override fun onDestroy() {
         pulse.removeCallbacksAndMessages(null); recognizer?.destroy(); recognizer = null; doc.destroy(); super.onDestroy()
