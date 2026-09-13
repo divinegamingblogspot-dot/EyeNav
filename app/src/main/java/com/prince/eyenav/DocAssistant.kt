@@ -88,7 +88,7 @@ class DocAssistant(private val context: Context) : TextToSpeech.OnInitListener {
                 if (s?.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) == true) speak("Phone locked.")
                 else speak("I cannot lock the phone until Accessibility control is enabled.")
             }
-            "dnd" -> openSettings(Settings.ACTION_ZEN_MODE_SETTINGS, "Do Not Disturb settings")
+            "dnd" -> openSettings("android.settings.ZEN_MODE_SETTINGS", "Do Not Disturb settings")
             "battery_optimization" -> {
                 try {
                     context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
