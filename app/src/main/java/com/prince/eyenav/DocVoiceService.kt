@@ -17,7 +17,7 @@ import android.speech.SpeechRecognizer
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
-/** Persistent voice channel. Started by a visible user action; keeps Doc listening while you switch apps. */
+/** Persistent voice channel. Prefers on-device recognition when the phone exposes it. */
 class DocVoiceService : Service() {
     companion object {
         const val ACTION_START = "com.prince.eyenav.DOC_START"
@@ -52,7 +52,11 @@ class DocVoiceService : Service() {
 
     private fun setupRecognizer() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) return
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        recognizer = if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+            SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+        } else {
+            SpeechRecognizer.createSpeechRecognizer(this)
+        }
         recognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: android.os.Bundle?) { updateNotification("VOICE CHANNEL • LISTENING") }
             override fun onBeginningOfSpeech() { updateNotification("VOICE CHANNEL • HEARING YOU") }
@@ -78,9 +82,7 @@ class DocVoiceService : Service() {
         handler.postDelayed({
             restarting = false
             if (!listening) return@postDelayed
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                updateNotification("MICROPHONE PERMISSION REQUIRED"); return@postDelayed
-            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { updateNotification("MICROPHONE PERMISSION REQUIRED"); return@postDelayed }
             try {
                 recognizer?.cancel()
                 recognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
