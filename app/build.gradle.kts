@@ -15,8 +15,8 @@ android {
         applicationId = "com.prince.eyenav"
         minSdk = 29
         targetSdk = 36
-        versionCode = 8
-        versionName = "8.0-DOC-VOICE"
+        versionCode = 9
+        versionName = "9.0-DOC-HOTWORD"
     }
 }
 
@@ -25,4 +25,5 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.android.material:material:1.13.0")
     implementation("androidx.lifecycle:lifecycle-service:2.10.0")
+    implementation("com.alphacephei:vosk-android:0.3.47")
 }
