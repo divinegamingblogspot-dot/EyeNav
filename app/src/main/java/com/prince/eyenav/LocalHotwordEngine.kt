@@ -29,6 +29,7 @@ class LocalHotwordEngine(
         private const val MODEL_DIR = "vosk-model-small-en-us-0.15"
         private const val SAMPLE_RATE = 16000
     }
+
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var running = false
     private var recorder: AudioRecord? = null
@@ -141,9 +142,7 @@ class LocalHotwordEngine(
             if (n <= 0) continue
             val rec = recognizer ?: continue
             if (rec.acceptWaveForm(buffer, n)) {
-                val json = rec.result()
-                val match = Regex("\\\"text\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").find(json)
-                val text = if (match != null) match.groupValues[1].trim() else ""
+                val text = extractVoskText(rec.result())
                 val wake = extractWake(text)
                 if (wake != null) {
                     main.post { onWake(wake) }
@@ -151,6 +150,19 @@ class LocalHotwordEngine(
                 }
             }
         }
+    }
+
+    private fun extractVoskText(json: String): String {
+        val key = "\"text\""
+        val keyIndex = json.indexOf(key)
+        if (keyIndex < 0) return ""
+        val colon = json.indexOf(':', keyIndex + key.length)
+        if (colon < 0) return ""
+        val firstQuote = json.indexOf('"', colon + 1)
+        if (firstQuote < 0) return ""
+        val secondQuote = json.indexOf('"', firstQuote + 1)
+        if (secondQuote < 0) return ""
+        return json.substring(firstQuote + 1, secondQuote).trim()
     }
 
     private fun extractWake(text: String): String? {
