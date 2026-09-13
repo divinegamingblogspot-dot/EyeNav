@@ -4,7 +4,7 @@ import android.content.Context
 import java.util.Locale
 import java.util.regex.Pattern
 
-/** DOC // local cognitive router: deterministic, offline-first command execution. */
+/** DOC // deterministic offline command router with natural voice phrasing. */
 class DocBrain(private val context: Context) {
     fun hasKey(): Boolean = true
     fun setKey(key: String) = Unit
@@ -18,8 +18,7 @@ class DocBrain(private val context: Context) {
         if (original.isBlank()) return emptyList()
         val clean = original.replace(Regex("^(hey|ok|okay|yo)?\\s*doc[,:]?\\s*", RegexOption.IGNORE_CASE), "").trim()
         if (clean.contains(Regex("\\s+then\\s+", RegexOption.IGNORE_CASE))) {
-            return clean.split(Regex("\\s+then\\s+", RegexOption.IGNORE_CASE))
-                .flatMap { part -> parseSingle(part.trim(), screen) }
+            return clean.split(Regex("\\s+then\\s+", RegexOption.IGNORE_CASE)).flatMap { parseSingle(it.trim(), screen) }
         }
         return parseSingle(clean, screen)
     }
@@ -60,6 +59,19 @@ class DocBrain(private val context: Context) {
             l == "settings" || l.startsWith("open settings") || l.startsWith("show settings") -> out += Action("settings")
             l.contains("accessibility") -> out += Action("accessibility_settings")
             l == "camera" || l.startsWith("open camera") || l.startsWith("launch camera") -> out += Action("open_app", name = "Camera")
+
+            // Natural messaging phrases are converted to the existing accessibility-powered WhatsApp flow.
+            l.startsWith("text ") || l.startsWith("message ") || l.startsWith("send a text ") || l.startsWith("send text ") ||
+                l.startsWith("send a whatsapp ") || l.startsWith("whatsapp ") -> {
+                val m = parseMessageTarget(original)
+                if (m != null) out += Action("whatsapp_message", name = m.first, text = m.second)
+                else if (l.startsWith("whatsapp")) out += Action("open_app", name = "WhatsApp")
+                else out += Action("sms", text = original.substringAfter(' ').trim())
+            }
+            l.contains("whatsapp") && (l.contains("message") || l.contains("text ") || l.contains("send ")) -> {
+                val m = parseMessageTarget(original)
+                if (m != null) out += Action("whatsapp_message", name = m.first, text = m.second) else out += Action("open_app", name = "WhatsApp")
+            }
             l.startsWith("open ") || l.startsWith("launch ") || l.startsWith("start app ") -> out += Action("open_app", name = if (l.startsWith("start app ")) original.substring(10).trim() else original.substringAfter(' ').trim())
             l.startsWith("close ") || l.startsWith("exit ") -> out += Action("back")
             l.startsWith("tap ") || l.startsWith("click ") || l.startsWith("press ") || l.startsWith("select ") -> out += Action("click_text", text = original.substringAfter(' ').trim())
@@ -68,7 +80,7 @@ class DocBrain(private val context: Context) {
             l.startsWith("search for ") || l.startsWith("google ") || l.startsWith("search ") -> out += Action("web_search", text = original.substringAfter(' ').trim().removePrefix("for ").trim())
             l.startsWith("go to ") || l.startsWith("navigate to ") || l.startsWith("take me to ") -> out += Action("maps", text = original.substringAfter("to ").trim())
             l.startsWith("call ") || l.startsWith("dial ") -> out += Action("call", text = original.substringAfter(' ').trim())
-            l.startsWith("text ") || l.startsWith("sms ") -> out += Action("sms", text = original.substringAfter(' ').trim())
+            l.startsWith("sms ") -> out += Action("sms", text = original.substringAfter(' ').trim())
             l.contains("set a timer") || l.contains("set timer") -> out += Action("timer", text = original)
             l.contains("set an alarm") || l.contains("set alarm") || l.contains("wake me") -> out += Action("alarm", text = original)
             l.contains("screenshot") || l.contains("capture screen") -> out += Action("screenshot")
@@ -76,15 +88,11 @@ class DocBrain(private val context: Context) {
             l.contains("pause music") || l == "pause" || l.contains("pause playback") -> out += Action("media", direction = "pause")
             l.contains("next song") || l.contains("next track") -> out += Action("media", direction = "next")
             l.contains("previous song") || l.contains("previous track") -> out += Action("media", direction = "previous")
-            l.contains("whatsapp") && (l.contains("message") || l.contains("text ") || l.contains("send ")) -> {
-                val m = parseWhatsApp(clean)
-                if (m != null) out += Action("whatsapp_message", name = m.first, text = m.second) else out += Action("open_app", name = "WhatsApp")
-            }
             l == "send" || l == "send it" || l == "send message" -> out += Action("send_pending")
             l.contains("pause") && (l.contains("game") || l.contains("playing")) -> out += Action("click_text", text = "pause")
             l.contains("stop listening") || l.contains("sleep doc") || l.contains("go to sleep") -> out += Action("stop_listening")
             l.contains("wake up doc") || l.contains("resume listening") -> out += Action("resume_listening")
-            l.contains("help") || l.contains("what can you do") -> out += Action("speak", text = "I am Doc. I can execute chained voice commands, navigate apps, use accessibility taps, type, scroll, read screens, call, text, open maps and search, set alarms and timers, control media, flashlight, brightness, volume, battery, WhatsApp and lock the screen. I run without an AI API key. I never store your device PIN or pattern.")
+            l.contains("help") || l.contains("what can you do") -> out += Action("speak", text = "I am Doc. I can open apps, tap, type, scroll, read screens, search, navigate, call, text, message WhatsApp contacts, set alarms and timers, control media, flashlight, brightness and volume. I can keep the voice core running as a foreground service. I never store your device PIN or pattern.")
             l.startsWith("say ") -> out += Action("speak", text = original.substringAfter(' ').trim())
             l.startsWith("remember ") -> out += Action("remember", text = original.substringAfter(' ').trim())
             else -> {
@@ -96,10 +104,11 @@ class DocBrain(private val context: Context) {
         return out
     }
 
-    private fun parseWhatsApp(c: String): Pair<String, String>? {
+    private fun parseMessageTarget(c: String): Pair<String, String>? {
         val patterns = listOf(
-            Pattern.compile("(?i)(?:message|send)(?: whatsapp)?(?: to)?\\s+(.+?)\\s+(?:saying|that says|with message)\\s+(.+)"),
-            Pattern.compile("(?i)whatsapp\\s+(.+?)\\s*:\\s*(.+)")
+            Pattern.compile("(?i)(?:text|message|whatsapp|send(?: a)?(?: whatsapp)?(?: message| text)?)\\s+(?:to\\s+)?(.+?)\\s+(?:saying|that says|with message|and say|says)\\s+(.+)"),
+            Pattern.compile("(?i)(?:text|message|whatsapp)\\s+(?:to\\s+)?(.+?)\\s*:\\s*(.+)"),
+            Pattern.compile("(?i)send(?: a)?(?: whatsapp)?(?: message| text)?\\s+to\\s+(.+?)\\s+(.+)")
         )
         for (p in patterns) {
             val m = p.matcher(c)
