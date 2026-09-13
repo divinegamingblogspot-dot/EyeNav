@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
         root.addView(button("🎙 Talk to Doc"){requestAndListen()})
         root.addView(button("♾ Always listen"){continuous=!continuous;status.text=if(continuous)"Always listening is ON." else "Always listening is OFF.";if(continuous)requestAndListen()})
         root.addView(button("♿ Enable Accessibility"){startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))})
-        val key=EditText(this).apply{hint="Gemini API key (stored on this phone)";setTextColor(Color.WHITE);setHintTextColor(Color.GRAY);singleLine=true;inputType=0x00000081}
+        val key=EditText(this).apply{hint="Gemini API key (stored on this phone)";setTextColor(Color.WHITE);setHintTextColor(Color.GRAY);isSingleLine=true;inputType=0x00000081}
         root.addView(key,LinearLayout.LayoutParams(-1,58))
         root.addView(button("Save AI brain key"){doc.setAiKey(key.text.toString());status.text=if(doc.hasAiKey())"AI brain connected." else "No API key saved."})
         root.addView(button("Test voice"){doc.speak("Systems online. Doc is ready.")})
