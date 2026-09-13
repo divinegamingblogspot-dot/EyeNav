@@ -1,6 +1,7 @@
 package com.prince.eyenav
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.Rect
@@ -80,9 +81,7 @@ class EyeNavAccessibilityService : AccessibilityService() {
         val roots = linkedSetOf<AccessibilityNodeInfo>()
         rootInActiveWindow?.let { roots += it }
         try { windows?.forEach { it.root?.let { r -> roots += r } } } catch (_: Throwable) { }
-        roots.forEach { root ->
-            findNodeRecursive(root, needle)?.let { return it }
-        }
+        roots.forEach { root -> findNodeRecursive(root, needle)?.let { return it } }
         return null
     }
 
@@ -99,8 +98,7 @@ class EyeNavAccessibilityService : AccessibilityService() {
     }
 
     fun typeText(text: String): Boolean {
-        val node = findFocusedEditable(rootInActiveWindow) ?: findEditable(rootInActiveWindow)
-        ?: return false
+        val node = findFocusedEditable(rootInActiveWindow) ?: findEditable(rootInActiveWindow) ?: return false
         val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
@@ -142,10 +140,7 @@ class EyeNavAccessibilityService : AccessibilityService() {
     private fun swipe(x1: Double, y1: Double, x2: Double, y2: Double) {
         val w = resources.displayMetrics.widthPixels.toDouble()
         val h = resources.displayMetrics.heightPixels.toDouble()
-        val path = Path().apply {
-            moveTo((w * x1).toFloat(), (h * y1).toFloat())
-            lineTo((w * x2).toFloat(), (h * y2).toFloat())
-        }
+        val path = Path().apply { moveTo((w * x1).toFloat(), (h * y1).toFloat()); lineTo((w * x2).toFloat(), (h * y2).toFloat()) }
         try { dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 400)).build(), null, null) } catch (_: Throwable) { }
     }
 
