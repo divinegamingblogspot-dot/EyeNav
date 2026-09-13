@@ -17,7 +17,17 @@ class DocBrain(private val context: Context) {
         val original = raw.trim()
         if (original.isBlank()) return emptyList()
         val clean = original.replace(Regex("^(hey|ok|okay|yo)?\\s*doc[,:]?\\s*", RegexOption.IGNORE_CASE), "").trim()
-        val l = clean.lowercase(Locale.getDefault())
+        if (clean.contains(Regex("\\s+then\\s+", RegexOption.IGNORE_CASE))) {
+            return clean.split(Regex("\\s+then\\s+", RegexOption.IGNORE_CASE))
+                .flatMap { part -> parseSingle(part.trim(), screen) }
+        }
+        return parseSingle(clean, screen)
+    }
+
+    private fun parseSingle(clean: String, screen: String): List<Action> {
+        val original = clean.trim()
+        if (original.isBlank()) return emptyList()
+        val l = original.lowercase(Locale.getDefault())
         val out = mutableListOf<Action>()
         when {
             l.matches(Regex("(go )?home|home screen|take me home|return home|go to home")) -> out += Action("home")
@@ -25,11 +35,17 @@ class DocBrain(private val context: Context) {
             l.contains("recent apps") || l == "recents" || l.contains("show recent") -> out += Action("recents")
             l.contains("notifications") || l.contains("notification panel") -> out += Action("notifications")
             l.contains("quick settings") || l.contains("control center") -> out += Action("quick_settings")
+            l.contains("lock phone") || l.contains("lock my phone") || l == "lock" || l.contains("turn screen off") -> out += Action("lock_screen")
+            l.contains("do not disturb") || l.contains("dnd") -> out += Action("dnd")
+            l.contains("battery optimization") || l.contains("battery unrestricted") || l.contains("ignore battery") -> out += Action("battery_optimization")
+            l.contains("app info") || l.contains("app permissions") -> out += Action("app_info")
             l.contains("scroll down") || l.contains("move down") || l == "down" -> out += Action("scroll", direction = "down")
             l.contains("scroll up") || l.contains("move up") || l == "up" -> out += Action("scroll", direction = "up")
             l.contains("scroll left") || l == "left" -> out += Action("scroll", direction = "left")
             l.contains("scroll right") || l == "right" -> out += Action("scroll", direction = "right")
             l.contains("read screen") || l.contains("read this screen") || l.contains("what is on screen") || l.contains("what's on screen") || l.contains("what do you see") || l.contains("scan screen") -> out += Action("read_screen")
+            l.contains("repeat that") || l.contains("say that again") || l.contains("repeat yourself") -> out += Action("repeat")
+            l.contains("what did you hear") || l.contains("what did i say") -> out += Action("last_command")
             l.contains("time") && (l.contains("what") || l.contains("current") || l == "time") -> out += Action("time")
             l.contains("date") || l.contains("what day is it") || l.contains("today's day") -> out += Action("date")
             l.contains("battery") || l.contains("charge") -> out += Action("battery")
@@ -68,7 +84,7 @@ class DocBrain(private val context: Context) {
             l.contains("pause") && (l.contains("game") || l.contains("playing")) -> out += Action("click_text", text = "pause")
             l.contains("stop listening") || l.contains("sleep doc") || l.contains("go to sleep") -> out += Action("stop_listening")
             l.contains("wake up doc") || l.contains("resume listening") -> out += Action("resume_listening")
-            l.contains("help") || l.contains("what can you do") -> out += Action("speak", text = "I am Doc. I can control navigation, apps, accessibility taps, typing, scrolling, screen reading, calls, messages, maps, search, alarms, timers, media, flashlight, brightness, volume, battery and WhatsApp. I run without an AI API key.")
+            l.contains("help") || l.contains("what can you do") -> out += Action("speak", text = "I am Doc. I can execute chained voice commands, navigate apps, use accessibility taps, type, scroll, read screens, call, text, open maps and search, set alarms and timers, control media, flashlight, brightness, volume, battery, WhatsApp and lock the screen. I run without an AI API key. I never store your device PIN or pattern.")
             l.startsWith("say ") -> out += Action("speak", text = original.substringAfter(' ').trim())
             l.startsWith("remember ") -> out += Action("remember", text = original.substringAfter(' ').trim())
             else -> {
