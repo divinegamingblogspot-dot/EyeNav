@@ -34,8 +34,7 @@ class DocVoiceService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createChannel()
-        startForegroundCompat()
+        createChannel(); startForegroundCompat()
         assistant = DocAssistant(this).also { a ->
             a.onStatus = { updateNotification(it) }
             a.onListeningState = { enabled -> listening = enabled; if (enabled) scheduleListen(200) else stopRecognizer() }
@@ -74,14 +73,13 @@ class DocVoiceService : Service() {
     }
 
     private fun scheduleListen(delay: Long) {
-        if (!listening || isDestroyed || recognizer == null || restarting) return
+        if (!listening || recognizer == null || restarting) return
         restarting = true
         handler.postDelayed({
             restarting = false
             if (!listening) return@postDelayed
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                updateNotification("MICROPHONE PERMISSION REQUIRED")
-                return@postDelayed
+                updateNotification("MICROPHONE PERMISSION REQUIRED"); return@postDelayed
             }
             try {
                 recognizer?.cancel()
@@ -97,8 +95,7 @@ class DocVoiceService : Service() {
     }
 
     private fun stopRecognizer() {
-        listening = false
-        handler.removeCallbacksAndMessages(null)
+        listening = false; handler.removeCallbacksAndMessages(null)
         try { recognizer?.cancel(); recognizer?.destroy() } catch (_: Throwable) { }
         recognizer = null
     }
@@ -126,10 +123,6 @@ class DocVoiceService : Service() {
 
     private fun updateNotification(text: String) { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text)) }
 
-    override fun onDestroy() {
-        stopRecognizer(); assistant?.destroy(); assistant = null
-        super.onDestroy()
-    }
-
+    override fun onDestroy() { stopRecognizer(); assistant?.destroy(); assistant = null; super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }
