@@ -38,7 +38,10 @@ class LocalHotwordEngine(
 
     fun start() {
         if (running) return
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { onStatus("DOC • MICROPHONE PERMISSION REQUIRED"); return }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            onStatus("DOC • MICROPHONE PERMISSION REQUIRED")
+            return
+        }
         running = true
         worker = thread(name = "DocHotword", start = true) {
             try {
@@ -48,9 +51,13 @@ class LocalHotwordEngine(
                 model = Model(path)
                 recognizer = Recognizer(model, SAMPLE_RATE.toFloat())
                 listenLoop()
-            } catch (t: Throwable) { onStatus("DOC • HOTWORD ERROR • ${t.javaClass.simpleName}"); running = false }
+            } catch (t: Throwable) {
+                onStatus("DOC • HOTWORD ERROR • ${t.javaClass.simpleName}")
+                running = false
+            }
         }
     }
+
     fun stop() {
         running = false
         try { recorder?.stop() } catch (_: Throwable) { }
@@ -62,6 +69,7 @@ class LocalHotwordEngine(
         model = null
         worker = null
     }
+
     private fun ensureModel(): String {
         val base = File(context.filesDir, "vosk")
         val modelDir = File(base, MODEL_DIR)
@@ -69,12 +77,30 @@ class LocalHotwordEngine(
         base.mkdirs()
         val zipFile = File(base, "model.zip")
         onStatus("DOC • DOWNLOADING LOCAL VOICE MODEL")
-        val conn = (URL(MODEL_URL).openConnection() as HttpURLConnection).apply { connectTimeout = 20000; readTimeout = 60000; requestMethod = "GET"; connect() }
+        val conn = (URL(MODEL_URL).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 20000
+            readTimeout = 60000
+            requestMethod = "GET"
+            connect()
+        }
         if (conn.responseCode !in 200..299) throw IllegalStateException("model download ${conn.responseCode}")
-        conn.inputStream.use { input -> BufferedInputStream(input).use { buffered -> FileOutputStream(zipFile).use { output ->
-            val buffer = ByteArray(64 * 1024); var total = 0L
-            while (running) { val n = buffered.read(buffer); if (n <= 0) break; output.write(buffer, 0, n); total += n; if (total % (2L * 1024L * 1024L) < n) onStatus("DOC • DOWNLOADING VOICE MODEL • ${total / 1024 / 1024} MB") }
-        } } }
+        conn.inputStream.use { input ->
+            BufferedInputStream(input).use { buffered ->
+                FileOutputStream(zipFile).use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (running) {
+                        val n = buffered.read(buffer)
+                        if (n <= 0) break
+                        output.write(buffer, 0, n)
+                        total += n
+                        if (total % (2L * 1024L * 1024L) < n) {
+                            onStatus("DOC • DOWNLOADING VOICE MODEL • ${total / 1024 / 1024} MB")
+                        }
+                    }
+                }
+            }
+        }
         conn.disconnect()
         if (!running) throw InterruptedException("stopped")
         onStatus("DOC • INSTALLING LOCAL VOICE MODEL")
@@ -83,35 +109,57 @@ class LocalHotwordEngine(
             while (entry != null) {
                 val out = File(base, entry.name)
                 if (!out.canonicalPath.startsWith(base.canonicalPath + File.separator)) throw SecurityException("bad zip")
-                if (entry.isDirectory) out.mkdirs() else { out.parentFile?.mkdirs(); FileOutputStream(out).use { output -> zip.copyTo(output) } }
-                zip.closeEntry(); entry = zip.nextEntry
+                if (entry.isDirectory) out.mkdirs() else {
+                    out.parentFile?.mkdirs()
+                    FileOutputStream(out).use { output -> zip.copyTo(output) }
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
             }
         }
         zipFile.delete()
         if (!File(modelDir, "am/final.mdl").exists()) throw IllegalStateException("model install failed")
         return modelDir.absolutePath
     }
+
     private fun listenLoop() {
         val min = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val size = maxOf(min * 2, 4096)
-        val r = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size)
-        recorder = r; r.startRecording(); onStatus("DOC • STANDBY • SAY HEY DOC")
+        val r = AudioRecord(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            size
+        )
+        recorder = r
+        r.startRecording()
+        onStatus("DOC • STANDBY • SAY HEY DOC")
         val buffer = ByteArray(size)
         while (running) {
-            val n = r.read(buffer, 0, buffer.size); if (n <= 0) continue
+            val n = r.read(buffer, 0, buffer.size)
+            if (n <= 0) continue
             val rec = recognizer ?: continue
             if (rec.acceptWaveForm(buffer, n)) {
                 val json = rec.result()
-                val text = Regex("\\\"text\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").find(json)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+                val match = Regex("\\\"text\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").find(json)
+                val text = if (match != null) match.groupValues[1].trim() else ""
                 val wake = extractWake(text)
-                if (wake != null) { main.post { onWake(wake) }; rec.reset() }
+                if (wake != null) {
+                    main.post { onWake(wake) }
+                    rec.reset()
+                }
             }
         }
     }
+
     private fun extractWake(text: String): String? {
-        val normalized = text.lowercase().replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
+        val normalized = text.lowercase()
+            .replace(Regex("[^a-z0-9 ]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
         if (normalized.isBlank()) return null
         val match = Regex("^(?:hey |okay |ok )?doc(?: (.*))?$").find(normalized) ?: return null
-        return match.groupValues.getOrNull(1)?.trim().orEmpty()
+        return match.groupValues[1].trim()
     }
 }
