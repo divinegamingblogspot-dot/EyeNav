@@ -15,29 +15,35 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 
+/** DOC // command deck. The heavy voice channel runs in DocVoiceService so commands survive app switching. */
 class MainActivity : ComponentActivity() {
     private lateinit var doc: DocAssistant
     private var recognizer: SpeechRecognizer? = null
     private lateinit var status: TextView
     private lateinit var transcript: TextView
     private lateinit var orb: TextView
+    private lateinit var voiceButton: Button
+    private lateinit var accessibilityButton: Button
     private var continuous = false
     private val pulse = Handler(Looper.getMainLooper())
+
     private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) listen() else status.text = "Microphone permission is required."
+        if (granted) listenOnce() else status.text = "MICROPHONE ACCESS REQUIRED"
     }
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.setStatusBarColor(Color.rgb(2, 5, 10)); window.setNavigationBarColor(Color.rgb(2, 5, 10))
         doc = DocAssistant(this).also { it.onStatus = { text -> runOnUiThread { status.text = text; pulseOrb() } } }
-        buildUi()
-        setupRecognizer()
-        pulseOrb()
+        buildUi(); setupRecognizer(); pulseOrb(); refreshAccessibilityState()
+        if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun bg(color: Int, radius: Float = 28f, stroke: Int = 0, strokeColor: Int = Color.TRANSPARENT) = GradientDrawable().apply {
@@ -46,84 +52,89 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(24, 22, 24, 22)
-            setBackgroundColor(Color.rgb(3, 7, 13))
-        }
-        root.addView(TextView(this).apply {
-            text = "D O C"; textSize = 30f; letterSpacing = .28f; gravity = Gravity.CENTER
-            setTextColor(Color.rgb(120, 220, 255))
-        }, LinearLayout.LayoutParams(-1, 55))
-        root.addView(TextView(this).apply {
-            text = "PERSONAL INTELLIGENCE SYSTEM  •  OFFLINE CORE"; textSize = 9f; letterSpacing = .14f; gravity = Gravity.CENTER
-            setTextColor(Color.rgb(105, 125, 145))
-        }, LinearLayout.LayoutParams(-1, 30))
+        val root = ScrollView(this).apply { setBackgroundColor(Color.rgb(2, 5, 10)) }
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(24, 28, 24, 28) }
+
+        body.addView(TextView(this).apply {
+            text = "D  O  C"; textSize = 32f; letterSpacing = .30f; gravity = Gravity.CENTER; setTextColor(Color.rgb(112, 224, 255))
+        }, LinearLayout.LayoutParams(-1, 60))
+        body.addView(TextView(this).apply {
+            text = "PERSONAL INTELLIGENCE  //  LOCAL COGNITIVE CORE"; textSize = 9f; letterSpacing = .11f; gravity = Gravity.CENTER; setTextColor(Color.rgb(90, 115, 135))
+        }, LinearLayout.LayoutParams(-1, 32))
+
         orb = TextView(this).apply {
-            text = "◉"; textSize = 76f; gravity = Gravity.CENTER
-            setTextColor(Color.rgb(90, 215, 255)); background = bg(Color.rgb(6, 20, 30), 100f, 2, Color.rgb(45, 150, 190))
+            text = "◉"; textSize = 78f; gravity = Gravity.CENTER; setTextColor(Color.rgb(115, 235, 255)); background = bg(Color.rgb(5, 22, 33), 120f, 2, Color.rgb(50, 170, 205))
         }
-        val orbParams = LinearLayout.LayoutParams(190, 190); orbParams.setMargins(0, 18, 0, 16); root.addView(orb, orbParams)
+        val orbParams = LinearLayout.LayoutParams(210, 210); orbParams.setMargins(0, 20, 0, 18); body.addView(orb, orbParams)
+
         status = TextView(this).apply {
-            text = "SYSTEMS NOMINAL"; textSize = 17f; gravity = Gravity.CENTER; setTextColor(Color.WHITE)
-            background = bg(Color.rgb(9, 17, 27), 20f, 1, Color.rgb(35, 65, 85)); setPadding(12, 12, 12, 12)
+            text = "SYSTEMS NOMINAL"; textSize = 15f; gravity = Gravity.CENTER; setTextColor(Color.WHITE); setPadding(12, 10, 12, 10); background = bg(Color.rgb(8, 16, 25), 20f, 1, Color.rgb(30, 62, 82))
         }
-        root.addView(status, LinearLayout.LayoutParams(-1, 58))
-        transcript = TextView(this).apply {
-            text = "Awaiting command…"; textSize = 13f; gravity = Gravity.CENTER_VERTICAL; setTextColor(Color.rgb(160, 180, 195)); setPadding(16, 0, 16, 0)
-        }
-        root.addView(transcript, LinearLayout.LayoutParams(-1, 52))
-        val talk = button("◉   TALK TO DOC") { requestAndListen() }
-        talk.background = bg(Color.rgb(12, 64, 84), 22f, 1, Color.rgb(75, 190, 225)); root.addView(talk, LinearLayout.LayoutParams(-1, 58))
+        body.addView(status, LinearLayout.LayoutParams(-1, 58))
+        transcript = TextView(this).apply { text = "Voice channel standing by…"; textSize = 13f; gravity = Gravity.CENTER; setTextColor(Color.rgb(145, 170, 188)); setPadding(10, 8, 10, 8) }
+        body.addView(transcript, LinearLayout.LayoutParams(-1, 55))
+
+        voiceButton = button("◉   ACTIVATE JARVIS VOICE CORE") { toggleVoiceCore() }
+        voiceButton.background = bg(Color.rgb(11, 72, 94), 22f, 1, Color.rgb(70, 205, 235)); body.addView(voiceButton, LinearLayout.LayoutParams(-1, 62))
+        body.addView(button("◌   TALK ONCE") { requestAndListenOnce() }, LinearLayout.LayoutParams(-1, 56))
+        accessibilityButton = button("♿   CONNECT ACCESSIBILITY CORE") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        body.addView(accessibilityButton, LinearLayout.LayoutParams(-1, 56))
+
         val chips = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        listOf("Open WhatsApp", "Read screen", "Battery", "What time is it?", "Go home").forEach { command ->
-            val b = Button(this).apply {
-                text = command; isAllCaps = false; textSize = 11f; setTextColor(Color.LTGRAY)
-                background = bg(Color.rgb(10, 18, 27), 18f, 1, Color.rgb(30, 55, 70)); setOnClickListener { doc.execute(command) }
-            }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        listOf("Open WhatsApp", "Read screen", "Go home", "Battery", "Search for Delhi", "Turn flashlight on").forEach { command ->
+            val b = Button(this).apply { text = command; isAllCaps = false; textSize = 11f; setTextColor(Color.LTGRAY); background = bg(Color.rgb(8, 16, 24), 18f, 1, Color.rgb(28, 53, 68)); setOnClickListener { doc.execute(command) } }
             val p = LinearLayout.LayoutParams(-2, 48); p.setMargins(4, 4, 4, 4); row.addView(b, p)
         }
-        chips.addView(row); root.addView(chips, LinearLayout.LayoutParams(-1, 58))
-        root.addView(button("♾   ALWAYS LISTEN") {
-            continuous = !continuous; status.text = if (continuous) "ALWAYS LISTENING • ACTIVE" else "ALWAYS LISTENING • OFF"
-            if (continuous) requestAndListen()
-        })
-        root.addView(button("♿   ACCESSIBILITY CORE") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
-        root.addView(button("🔊   TEST DOC VOICE") { doc.speak("All systems are online. I am Doc. Your local command core is ready.") })
-        root.addView(TextView(this).apply {
-            text = "LOCAL CORE  •  ZERO API KEY  •  ZERO AI DAILY QUOTA\nAccessibility unlocks app control, navigation, taps, typing, swipes and readable-screen commands."
-            textSize = 9f; gravity = Gravity.CENTER; setTextColor(Color.rgb(85, 105, 120)); setPadding(4, 14, 4, 0)
-        }, LinearLayout.LayoutParams(-1, 58))
-        setContentView(root)
+        chips.addView(row); body.addView(chips, LinearLayout.LayoutParams(-1, 58))
+
+        body.addView(button("🔊   TEST CINEMATIC DOC VOICE") { doc.speak("All systems online. Voice channel stable. Local intelligence core ready.") }, LinearLayout.LayoutParams(-1, 54))
+        body.addView(TextView(this).apply {
+            text = "NO AI API KEY  •  NO DAILY MODEL QUOTA  •  OFFLINE COMMAND ROUTER\n\nAccessibility unlocks cross-app taps, typing, swipes, screen reading and navigation. Voice Core keeps listening through a microphone foreground service after you activate it."
+            textSize = 9f; gravity = Gravity.CENTER; setTextColor(Color.rgb(75, 100, 118)); setPadding(6, 18, 6, 12)
+        }, LinearLayout.LayoutParams(-1, 90))
+
+        root.addView(body); setContentView(root)
     }
 
     private fun button(label: String, action: () -> Unit) = Button(this).apply {
-        text = label; isAllCaps = false; textSize = 13f; setTextColor(Color.LTGRAY)
-        background = bg(Color.rgb(8, 15, 23), 20f, 1, Color.rgb(28, 50, 65)); setOnClickListener { action() }
+        text = label; isAllCaps = false; textSize = 12f; setTextColor(Color.LTGRAY); background = bg(Color.rgb(7, 14, 22), 20f, 1, Color.rgb(25, 48, 62)); setOnClickListener { action() }
     }
 
-    private fun pulseOrb() {
-        if (!::orb.isInitialized) return
-        orb.animate().scaleX(1.05f).scaleY(1.05f).setDuration(260).withEndAction { orb.animate().scaleX(1f).scaleY(1f).setDuration(360).start() }.start()
+    private fun toggleVoiceCore() {
+        if (continuous) stopVoiceCore() else requestAndStartVoiceCore()
+    }
+
+    private fun requestAndStartVoiceCore() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { audioPermission.launch(Manifest.permission.RECORD_AUDIO); return }
+        startVoiceCore()
+    }
+
+    private fun startVoiceCore() {
+        val intent = Intent(this, DocVoiceService::class.java).setAction(DocVoiceService.ACTION_START)
+        ContextCompat.startForegroundService(this, intent)
+        continuous = true; voiceButton.text = "◉   VOICE CORE ONLINE  //  TAP TO SLEEP"; status.text = "JARVIS VOICE CORE • ACTIVE"; pulseOrb()
+    }
+
+    private fun stopVoiceCore() {
+        stopService(Intent(this, DocVoiceService::class.java).setAction(DocVoiceService.ACTION_STOP))
+        continuous = false; voiceButton.text = "◉   ACTIVATE JARVIS VOICE CORE"; status.text = "VOICE CORE STANDBY"; pulseOrb()
     }
 
     private fun setupRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) { status.text = "Speech recognition unavailable."; return }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
         recognizer = SpeechRecognizer.createSpeechRecognizer(this).also { r ->
             r.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) { status.text = "LISTENING • VOICE CHANNEL OPEN"; pulseOrb() }
-                override fun onBeginningOfSpeech() { status.text = "I'M LISTENING"; pulseOrb() }
-                override fun onEndOfSpeech() { status.text = "PROCESSING COMMAND" }
-                override fun onError(error: Int) { status.text = "VOICE CHANNEL READY"; if (continuous) window.decorView.postDelayed({ listen() }, 700) }
+                override fun onBeginningOfSpeech() { status.text = "HEARING YOU"; pulseOrb() }
+                override fun onEndOfSpeech() { status.text = "PROCESSING" }
+                override fun onError(error: Int) { status.text = "VOICE CHANNEL READY" }
                 override fun onResults(results: Bundle?) {
                     val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                     transcript.text = if (text.isBlank()) "No command detected." else "VOICE INPUT  ›  $text"
                     if (text.isNotBlank()) doc.execute(text)
-                    if (continuous) window.decorView.postDelayed({ listen() }, 900)
                 }
-                override fun onPartialResults(partialResults: Bundle?) { partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { if (it.isNotBlank()) transcript.text = "VOICE INPUT  ›  $it" } }
+                override fun onPartialResults(partialResults: Bundle?) { partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.takeIf { it.isNotBlank() }?.let { transcript.text = "VOICE INPUT  ›  $it" } }
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
                 override fun onEvent(eventType: Int, params: Bundle?) = Unit
                 override fun onRmsChanged(rmsdB: Float) { if (rmsdB > 4) pulseOrb() }
@@ -131,9 +142,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestAndListen() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) audioPermission.launch(Manifest.permission.RECORD_AUDIO) else listen()
+    private fun requestAndListenOnce() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) audioPermission.launch(Manifest.permission.RECORD_AUDIO) else listenOnce()
     }
-    private fun listen() { if (!isFinishing) recognizer?.startListening(doc.recognizerIntent()) }
-    override fun onDestroy() { pulse.removeCallbacksAndMessages(null); recognizer?.destroy(); recognizer = null; doc.destroy(); super.onDestroy() }
+
+    private fun listenOnce() { try { recognizer?.cancel(); recognizer?.startListening(doc.recognizerIntent()) } catch (_: Throwable) { status.text = "VOICE ENGINE BUSY" } }
+
+    private fun pulseOrb() {
+        if (!::orb.isInitialized) return
+        orb.animate().scaleX(1.055f).scaleY(1.055f).setDuration(220).withEndAction { orb.animate().scaleX(1f).scaleY(1f).setDuration(380).start() }.start()
+    }
+
+    private fun refreshAccessibilityState() {
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty().contains(packageName, true)
+        accessibilityButton.text = if (enabled) "♿   ACCESSIBILITY CORE • CONNECTED" else "♿   CONNECT ACCESSIBILITY CORE"
+    }
+
+    override fun onResume() { super.onResume(); refreshAccessibilityState() }
+
+    override fun onDestroy() {
+        pulse.removeCallbacksAndMessages(null); recognizer?.destroy(); recognizer = null; doc.destroy(); super.onDestroy()
+    }
 }
