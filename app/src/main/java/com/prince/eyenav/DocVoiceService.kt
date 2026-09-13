@@ -19,18 +19,13 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.util.Locale
 
-/**
- * DOC always-ready voice core.
- * Keeps a microphone foreground service alive while the user has activated DOC,
- * including while the display is off/locked. Recognition prefers on-device mode.
- */
+/** DOC always-ready voice core. */
 class DocVoiceService : Service() {
     companion object {
         const val ACTION_START = "com.prince.eyenav.DOC_START"
         const val ACTION_STOP = "com.prince.eyenav.DOC_STOP"
         private const val CHANNEL_ID = "doc_voice_core"
         private const val NOTIFICATION_ID = 901
-        private const val WAKE_WORD = "doc"
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -39,6 +34,7 @@ class DocVoiceService : Service() {
     private var listening = true
     private var restarting = false
     private var wakeLock: PowerManager.WakeLock? = null
+    private var displayWakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -90,18 +86,18 @@ class DocVoiceService : Service() {
                 SpeechRecognizer.createSpeechRecognizer(this)
             }
             recognizer?.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: android.os.Bundle?) { updateNotification("DOC • SCREEN OFF READY • SAY DOC") }
+                override fun onReadyForSpeech(params: android.os.Bundle?) { updateNotification("DOC • SCREEN-OFF READY • SAY DOC") }
                 override fun onBeginningOfSpeech() { updateNotification("DOC • HEARING YOU") }
                 override fun onEndOfSpeech() { updateNotification("DOC • PROCESSING") }
                 override fun onError(error: Int) {
-                    val delay = if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1200L else 350L
-                    scheduleListen(delay)
+                    scheduleListen(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1200L else 350L)
                 }
                 override fun onResults(results: android.os.Bundle?) {
                     val heard = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                     val command = wakeCommand(heard)
                     if (command != null && listening) {
                         updateNotification("DOC • EXECUTING • ${command.take(70)}")
+                        wakeDisplayBriefly()
                         assistant?.execute(command)
                     } else if (heard.isNotBlank()) {
                         updateNotification("DOC • STANDBY • SAY DOC FIRST")
@@ -110,7 +106,7 @@ class DocVoiceService : Service() {
                 }
                 override fun onPartialResults(partialResults: android.os.Bundle?) {
                     val heard = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
-                    if (heard.contains(Regex("\\b(doc|doctor|hey doc|okay doc)\\b", RegexOption.IGNORE_CASE))) {
+                    if (heard.contains(Regex("\\b(doc|hey doc|okay doc|ok doc)\\b", RegexOption.IGNORE_CASE))) {
                         updateNotification("DOC • WAKE WORD DETECTED")
                     }
                 }
@@ -125,7 +121,6 @@ class DocVoiceService : Service() {
         }
     }
 
-    /** Returns only the command after the DOC wake word. */
     private fun wakeCommand(raw: String): String? {
         val text = raw.trim()
         if (text.isBlank()) return null
@@ -172,6 +167,22 @@ class DocVoiceService : Service() {
         }
     }
 
+    /** Briefly wakes the display so a command such as "Doc, open WhatsApp" can visibly launch. */
+    private fun wakeDisplayBriefly() {
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            displayWakeLock?.let { if (it.isHeld) it.release() }
+            @Suppress("DEPRECATION")
+            displayWakeLock = pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "DOC:CommandWake"
+            ).apply {
+                setReferenceCounted(false)
+                acquire(3500L)
+            }
+        } catch (_: Throwable) { }
+    }
+
     private fun stopRecognizer() {
         listening = false
         handler.removeCallbacksAndMessages(null)
@@ -181,11 +192,8 @@ class DocVoiceService : Service() {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Doc voice core",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply { description = "Persistent Doc voice control" }
+            val channel = NotificationChannel(CHANNEL_ID, "Doc voice core", NotificationManager.IMPORTANCE_LOW)
+                .apply { description = "Persistent Doc voice control" }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
@@ -220,7 +228,9 @@ class DocVoiceService : Service() {
         assistant?.destroy()
         assistant = null
         try { wakeLock?.let { if (it.isHeld) it.release() } } catch (_: Throwable) { }
+        try { displayWakeLock?.let { if (it.isHeld) it.release() } } catch (_: Throwable) { }
         wakeLock = null
+        displayWakeLock = null
         super.onDestroy()
     }
 
