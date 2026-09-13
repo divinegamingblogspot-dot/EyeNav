@@ -15,8 +15,8 @@ android {
         applicationId = "com.prince.eyenav"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "6.0"
+        versionCode = 7
+        versionName = "7.0-DOC-FUSION"
     }
 }
 
