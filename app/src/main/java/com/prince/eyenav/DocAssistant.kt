@@ -3,7 +3,6 @@ package com.prince.eyenav
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
-import android.media.session.MediaSession
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Handler
@@ -12,7 +11,6 @@ import android.provider.AlarmClock
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
-import android.speech.tts.Voice
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -27,6 +25,7 @@ class DocAssistant(private val context: Context) : TextToSpeech.OnInitListener {
     private var pendingWhatsApp = false
     private var torchOn = false
     private var lastCommand = ""
+    private var lastSpoken = ""
     var onStatus: ((String) -> Unit)? = null
     var onListeningState: ((Boolean) -> Unit)? = null
 
@@ -45,6 +44,7 @@ class DocAssistant(private val context: Context) : TextToSpeech.OnInitListener {
     fun speak(text: String) {
         val clean = text.trim().replace(Regex("\\s+"), " ")
         if (clean.isBlank()) return
+        lastSpoken = clean
         onStatus?.invoke(clean)
         if (ready) tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "DOC_${System.nanoTime()}")
     }
@@ -84,6 +84,23 @@ class DocAssistant(private val context: Context) : TextToSpeech.OnInitListener {
             "recents" -> { s?.openRecents(); speak("Recent apps.") }
             "notifications" -> { s?.openNotifications(); speak("Notifications.") }
             "quick_settings" -> { s?.openQuickSettings(); speak("Quick settings.") }
+            "lock_screen" -> {
+                if (s?.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN) == true) speak("Phone locked.")
+                else speak("I cannot lock the phone until Accessibility control is enabled.")
+            }
+            "dnd" -> openSettings(Settings.ACTION_ZEN_MODE_SETTINGS, "Do Not Disturb settings")
+            "battery_optimization" -> {
+                try {
+                    context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    speak("Opening battery optimization control.")
+                } catch (_: Throwable) { openSettings(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS, "battery optimization settings") }
+            }
+            "app_info" -> {
+                try {
+                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    speak("Opening DOC app information.")
+                } catch (_: Throwable) { speak("App information is unavailable.") }
+            }
             "scroll" -> { if (s == null) speak("Accessibility core is offline.") else s.swipe(a.direction) }
             "click_text" -> if (!(s?.clickText(a.text) ?: false)) speak("I could not locate ${a.text}.") else speak("Done.")
             "long_click_text" -> if (!(s?.clickText(a.text, true) ?: false)) speak("I could not locate ${a.text}.") else speak("Long press complete.")
@@ -118,6 +135,8 @@ class DocAssistant(private val context: Context) : TextToSpeech.OnInitListener {
             "whatsapp_message" -> prepareWhatsAppMessage(a.name, a.text)
             "send_pending" -> sendPendingWhatsApp()
             "remember" -> remember(a.text)
+            "repeat" -> if (lastSpoken.isNotBlank()) speak(lastSpoken) else speak("I have not spoken anything yet.")
+            "last_command" -> if (lastCommand.isNotBlank()) speak("I heard: $lastCommand") else speak("I have not received a command yet.")
             "stop_listening" -> { onListeningState?.invoke(false); speak("Going quiet. Say wake up Doc from the Doc screen to resume.") }
             "resume_listening" -> { onListeningState?.invoke(true); speak("Voice channel restored.") }
             "speak" -> speak(a.text)
