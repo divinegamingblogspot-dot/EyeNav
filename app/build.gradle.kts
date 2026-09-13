@@ -15,8 +15,8 @@ android {
         applicationId = "com.prince.eyenav"
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
-        versionName = "7.0-DOC-FUSION"
+        versionCode = 8
+        versionName = "8.0-DOC-VOICE"
     }
 }
 
@@ -25,9 +25,4 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.android.material:material:1.13.0")
     implementation("androidx.lifecycle:lifecycle-service:2.10.0")
-    implementation("androidx.camera:camera-core:1.5.0")
-    implementation("androidx.camera:camera-camera2:1.5.0")
-    implementation("androidx.camera:camera-lifecycle:1.5.0")
-    implementation("androidx.camera:camera-view:1.5.0")
-    implementation("com.google.mediapipe:tasks-vision:0.10.26")
 }
