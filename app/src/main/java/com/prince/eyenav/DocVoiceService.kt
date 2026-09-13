@@ -1,6 +1,7 @@
 package com.prince.eyenav
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -19,13 +20,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.util.Locale
 
-/** DOC always-ready voice core. */
+/** DOC always-ready voice core. Never stores or enters device credentials. */
 class DocVoiceService : Service() {
     companion object {
         const val ACTION_START = "com.prince.eyenav.DOC_START"
         const val ACTION_STOP = "com.prince.eyenav.DOC_STOP"
         private const val CHANNEL_ID = "doc_voice_core"
         private const val NOTIFICATION_ID = 901
+        private const val UNLOCK_POLL_MS = 650L
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -35,6 +37,8 @@ class DocVoiceService : Service() {
     private var restarting = false
     private var wakeLock: PowerManager.WakeLock? = null
     private var displayWakeLock: PowerManager.WakeLock? = null
+    private var pendingLockedCommand: String? = null
+    private var unlockWatcherActive = false
 
     override fun onCreate() {
         super.onCreate()
@@ -66,6 +70,7 @@ class DocVoiceService : Service() {
                 scheduleListen(100)
             }
         }
+        checkPendingAfterResume()
         return START_STICKY
     }
 
@@ -96,9 +101,13 @@ class DocVoiceService : Service() {
                     val heard = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                     val command = wakeCommand(heard)
                     if (command != null && listening) {
-                        updateNotification("DOC • EXECUTING • ${command.take(70)}")
-                        wakeDisplayBriefly()
-                        assistant?.execute(command)
+                        if (isDeviceLocked()) {
+                            queueUntilUnlocked(command)
+                        } else {
+                            updateNotification("DOC • EXECUTING • ${command.take(70)}")
+                            wakeDisplayBriefly()
+                            assistant?.execute(command)
+                        }
                     } else if (heard.isNotBlank()) {
                         updateNotification("DOC • STANDBY • SAY DOC FIRST")
                     }
@@ -128,6 +137,48 @@ class DocVoiceService : Service() {
             ?: return null
         val command = match.groupValues.getOrNull(1)?.trim().orEmpty()
         return command.ifBlank { "speak Say the command." }
+    }
+
+    private fun isDeviceLocked(): Boolean =
+        (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true)
+
+    /** Keeps the command only in RAM until Android reports the device is unlocked. */
+    private fun queueUntilUnlocked(command: String) {
+        pendingLockedCommand = command
+        wakeDisplayBriefly()
+        updateNotification("DOC • LOCKED • UNLOCK PHONE • COMMAND QUEUED IN RAM")
+        assistant?.speak("Please unlock your phone. I will continue automatically.")
+        watchForUnlock()
+    }
+
+    private fun watchForUnlock() {
+        if (unlockWatcherActive) return
+        unlockWatcherActive = true
+        handler.post(unlockPoll)
+    }
+
+    private val unlockPoll = object : Runnable {
+        override fun run() {
+            val pending = pendingLockedCommand
+            if (pending == null) {
+                unlockWatcherActive = false
+                return
+            }
+            if (!isDeviceLocked()) {
+                pendingLockedCommand = null
+                unlockWatcherActive = false
+                wakeDisplayBriefly()
+                updateNotification("DOC • UNLOCKED • RESUMING COMMAND")
+                assistant?.execute(pending)
+                return
+            }
+            updateNotification("DOC • WAITING FOR PHONE UNLOCK")
+            handler.postDelayed(this, UNLOCK_POLL_MS)
+        }
+    }
+
+    private fun checkPendingAfterResume() {
+        if (pendingLockedCommand != null) watchForUnlock()
     }
 
     private fun scheduleListen(delay: Long) {
@@ -167,7 +218,6 @@ class DocVoiceService : Service() {
         }
     }
 
-    /** Briefly wakes the display so a command such as "Doc, open WhatsApp" can visibly launch. */
     private fun wakeDisplayBriefly() {
         try {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
@@ -188,6 +238,7 @@ class DocVoiceService : Service() {
         handler.removeCallbacksAndMessages(null)
         try { recognizer?.cancel(); recognizer?.destroy() } catch (_: Throwable) { }
         recognizer = null
+        unlockWatcherActive = false
     }
 
     private fun createChannel() {
@@ -227,6 +278,7 @@ class DocVoiceService : Service() {
         stopRecognizer()
         assistant?.destroy()
         assistant = null
+        pendingLockedCommand = null
         try { wakeLock?.let { if (it.isHeld) it.release() } } catch (_: Throwable) { }
         try { displayWakeLock?.let { if (it.isHeld) it.release() } } catch (_: Throwable) { }
         wakeLock = null
